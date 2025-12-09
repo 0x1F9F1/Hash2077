@@ -8,7 +8,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -17,17 +16,6 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-
-using String = std::string;
-using StringView = std::string_view;
-
-template <typename T>
-using Vec = std::vector<T>;
-
-template <typename T, typename U>
-using Pair = std::pair<T, U>;
-
-using FilterWord = size_t;
 
 struct StringBuffer
 {
@@ -45,23 +33,15 @@ struct StringBuffer
         length += len;
     }
 
-    StringView str() const
+    std::string_view str() const
     {
         return {buffer, length};
     }
 };
 
-struct Adler32AndSha256
-{
-    uint32_t adler;
-    SHA256_Hash sha;
-};
-
 struct Collider
 {
 public:
-    Collider();
-
     void AddHash(uint32_t adler, SHA256_Hash sha);
     void NextPart();
     void AddString(const char* data);
@@ -75,13 +55,13 @@ public:
     }
 
     ThreadPool* Pool {};
-    std::unordered_set<String> FoundStrings;
+    std::unordered_set<std::string> FoundStrings;
 
 private:
-    void PushPrefix(const String* suffixes, const Adler32::HashPart* suffixes2, size_t suffix_count);
+    void PushPrefix(const std::string* suffixes, const Adler32::HashPart* suffixes2, size_t suffix_count);
     void PopPrefix();
 
-    void PushSuffix(const String* prefixes, size_t prefix_count);
+    void PushSuffix(const std::string* prefixes, size_t prefix_count);
 
     void GetPrefix(StringBuffer& buffer, size_t index) const;
     void _GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t prefix_count) const;
@@ -95,23 +75,24 @@ private:
     void HashReverse(
         const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length) const;
 
-    Vec<Vec<String>> Parts {};
-    Vec<Vec<Adler32::HashPart>> AdlerParts {};
+    std::vector<std::vector<std::string>> Parts {};
+    std::vector<std::vector<Adler32::HashPart>> AdlerParts {};
 
-    Vec<uint32_t> Suffixes {};
-    Vec<SHA256_Hash> ShaHashes {};
+    std::vector<uint32_t> Suffixes {};
+    std::vector<SHA256_Hash> ShaHashes {};
 
-    Vec<Vec<uint32_t>> Prefixes {};
-    Vec<std::span<const String>> CurrentParts {};
+    std::vector<std::vector<uint32_t>> Prefixes {};
+    std::vector<std::span<const std::string>> CurrentParts {};
 
     size_t PrefixPos {};
     size_t SuffixPos {};
 
-    Vec<FilterWord> Filter {};
+    using FilterWord = size_t;
+    std::vector<FilterWord> Filter {};
 
-    Vec<uint32_t> HashIndices {};
-    Vec<uint32_t> HashBuckets {};
-    Vec<uint8_t> SubHashes {};
+    std::vector<uint32_t> HashIndices {};
+    std::vector<uint32_t> HashBuckets {};
+    std::vector<uint8_t> SubHashes {};
 
     uint64_t TeraHashTotal = 0;
     uint64_t HashSubTotal = 0;
@@ -144,24 +125,13 @@ static inline void bit_set(T* bits, size_t index)
     bits[index / Radix] |= (T(1) << (index % Radix));
 }
 
-Collider::Collider()
+void Collider::PushPrefix(const std::string* suffixes, const Adler32::HashPart* suffixes2, size_t suffix_count)
 {
-    //Parts = std::move(parts);
-
-    //for (auto& hash : hashes)
-    //{
-    //    Suffixes.push_back(hash.adler);
-    //    ShaHashes.push_back(hash.sha);
-    //}
-}
-
-void Collider::PushPrefix(const String* suffixes, const Adler32::HashPart* suffixes2, size_t suffix_count)
-{
-    const Vec<uint32_t>& prefixes = Prefixes[PrefixPos];
+    const std::vector<uint32_t>& prefixes = Prefixes[PrefixPos];
     CurrentParts[PrefixPos] = {suffixes, suffix_count};
 
     ++PrefixPos;
-    Vec<uint32_t>& hashes = Prefixes[PrefixPos];
+    std::vector<uint32_t>& hashes = Prefixes[PrefixPos];
 
     size_t prefix_count = prefixes.size();
     hashes.resize(prefix_count * suffix_count);
@@ -177,16 +147,16 @@ void Collider::PopPrefix()
     --PrefixPos;
 }
 
-void Collider::PushSuffix(const String* prefixes, size_t prefix_count)
+void Collider::PushSuffix(const std::string* prefixes, size_t prefix_count)
 {
     size_t suffix_count = Suffixes.size();
 
-    Vec<uint32_t> suffixes;
+    std::vector<uint32_t> suffixes;
     suffixes.resize(suffix_count * prefix_count);
 
     for (size_t i = 0; i < prefix_count; ++i)
     {
-        StringView prefix = prefixes[i];
+        std::string_view prefix = prefixes[i];
 
         HashReverse(
             Suffixes.data(), &suffixes[i * suffix_count], suffix_count, (const uint8_t*) prefix.data(), prefix.size());
@@ -210,7 +180,7 @@ void Collider::_GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t p
     const auto suffixes = CurrentParts[i];
     prefix_count /= suffixes.size();
 
-    StringView suffix = suffixes[index / prefix_count];
+    std::string_view suffix = suffixes[index / prefix_count];
     index %= prefix_count;
 
     _GetPrefix(buffer, index, i, prefix_count);
@@ -234,7 +204,7 @@ size_t Collider::GetSuffix(StringBuffer& buffer, size_t index) const
         const auto prefixes = CurrentParts[i];
         suffix_count /= prefixes.size();
 
-        StringView prefix = prefixes[index / suffix_count];
+        std::string_view prefix = prefixes[index / suffix_count];
         index %= suffix_count;
 
         buffer.append(prefix.data(), prefix.size());
@@ -352,7 +322,7 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
 {
     for (const auto& part : Parts)
     {
-        Vec<Adler32::HashPart> adler {};
+        std::vector<Adler32::HashPart> adler {};
 
         for (const auto& str : part)
             adler.push_back(Adler32::Preprocess((const uint8_t*) str.data(), str.size()));
@@ -371,8 +341,8 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
 
     while (PrefixPos != SuffixPos)
     {
-        const Vec<String>& next_prefix = Parts[PrefixPos];
-        const Vec<String>& next_suffix = Parts[SuffixPos - 1];
+        const std::vector<std::string>& next_prefix = Parts[PrefixPos];
+        const std::vector<std::string>& next_suffix = Parts[SuffixPos - 1];
 
         size_t next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
         size_t next_suffix_size = Suffixes.size() * next_suffix.size();
@@ -522,7 +492,7 @@ void Collider::AddMatch(size_t index, uint32_t hash)
         GetPrefix(match, index);
         size_t target = GetSuffix(match, HashIndices[find - subs]);
 
-        StringView value = match.str();
+        std::string_view value = match.str();
         SHA256_Hash sha = SHA256_Hash::Hash(value.data(), value.size());
 
         if (sha == ShaHashes[target])
@@ -633,6 +603,7 @@ void Collider_AddString(Collider* collider, const char* string)
 
 size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_size, size_t suffix_table_size)
 {
+    g_Running = true;
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
 
     auto start = Stopwatch::now();

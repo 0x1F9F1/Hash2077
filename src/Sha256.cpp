@@ -1,11 +1,12 @@
 #include "Sha256.h"
 
 #include <immintrin.h>
+#include <cstring>
 
 struct SHA256_CTX
 {
     uint8_t data[64];
-    uint32_t datalen;
+    size_t datalen;
     uint64_t bitlen;
     uint32_t state[8];
 };
@@ -215,10 +216,10 @@ static void SHA256Update(SHA256_CTX* ctx, uint8_t data[], size_t len)
 {
     while (len > 0)
     {
-        uint32_t n = 64 - ctx->datalen;
+        size_t n = 64 - ctx->datalen;
 
         if (n > len)
-            n = (uint32_t) len;
+            n = len;
 
         for (size_t i = 0; i < n; ++i)
             ctx->data[ctx->datalen + i] = data[i];
@@ -238,7 +239,7 @@ static void SHA256Update(SHA256_CTX* ctx, uint8_t data[], size_t len)
 
 static void SHA256Final(SHA256_CTX* ctx, uint8_t hash[])
 {
-    uint32_t i = ctx->datalen;
+    size_t i = ctx->datalen;
 
     if (ctx->datalen < 56)
     {
