@@ -8,7 +8,12 @@ class _Collider(Structure):
 c_collider = POINTER(_Collider)
 
 class Hash2077:
-	def __init__(self, dll_path):
+	def __init__(self, dll_path=None):
+		script_path = Path(__file__).resolve().parent
+
+		if dll_path is None:
+			dll_path = script_path / "hash2077.dll"
+
 		self.lib = cdll.LoadLibrary(dll_path)
 
 		def load(name, restype, *argtypes):
@@ -25,7 +30,7 @@ class Hash2077:
 		self.Collider_Run = load("Collider_Run", c_size_t, c_collider, c_size_t, c_size_t, c_size_t)
 		self.Collider_GetResults = load("Collider_GetResults", None, c_collider, POINTER(c_char_p))
 
-		self.data_path = Path(__file__).resolve().parent / "data"
+		self.data_path = script_path / "data"
 		self.known = self._load_known(self.data_path / "known.txt")
 
 	def save(self):
@@ -45,7 +50,7 @@ class Hash2077:
 			for sha, name in sorted(self.known.items(), key=lambda x:x[1]):
 				f.write(f'{sha.hex().upper()} {name}\n')
 
-	def __call__(self, hashes, parts, num_threads=0, prefix_size=2**28, suffix_size=2**30):
+	def collide(self, hashes, parts, num_threads, prefix_size, suffix_size):
 		assert prefix_size <= 2**32
 		assert suffix_size <= 2**32
 

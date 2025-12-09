@@ -1,7 +1,7 @@
 #include "Sha256.h"
 
-#include <immintrin.h>
 #include <cstring>
+#include <immintrin.h>
 
 struct SHA256_CTX
 {
@@ -212,7 +212,7 @@ static void SHA256Init(SHA256_CTX* ctx)
     ctx->state[7] = 0x5be0cd19;
 }
 
-static void SHA256Update(SHA256_CTX* ctx, uint8_t data[], size_t len)
+static void SHA256Update(SHA256_CTX* ctx, const uint8_t* data, size_t len)
 {
     while (len > 0)
     {
@@ -268,7 +268,7 @@ SHA256_Hash SHA256_Hash::Hash(const void* data, size_t length)
 {
     SHA256_CTX ctx;
     SHA256Init(&ctx);
-    SHA256Update(&ctx, (unsigned char*) data, (unsigned int) length);
+    SHA256Update(&ctx, (const uint8_t*) data, length);
 
     SHA256_Hash hash;
     SHA256Final(&ctx, hash.data);

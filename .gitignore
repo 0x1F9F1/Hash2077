@@ -250,3 +250,7 @@ ModelManifest.xml
 # Compiled python files
 __pycache__/
 *.pyc
+
+python/*.dll
+python/*.txt
+python/cyberpunk2077_addresses.json

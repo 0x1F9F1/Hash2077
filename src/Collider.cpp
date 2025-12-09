@@ -58,10 +58,10 @@ public:
     std::unordered_set<std::string> FoundStrings;
 
 private:
-    void PushPrefix(const std::string* suffixes, const Adler32::HashPart* suffixes2, size_t suffix_count);
+    void PushPrefix(std::span<const std::string> suffixes, std::span<const Adler32::HashPart> adlers);
     void PopPrefix();
 
-    void PushSuffix(const std::string* prefixes, size_t prefix_count);
+    void PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string> prefixes);
 
     void GetPrefix(StringBuffer& buffer, size_t index) const;
     void _GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t prefix_count) const;
@@ -78,7 +78,7 @@ private:
     std::vector<std::vector<std::string>> Parts {};
     std::vector<std::vector<Adler32::HashPart>> AdlerParts {};
 
-    std::vector<uint32_t> Suffixes {};
+    std::vector<uint32_t> AdlerHashes {};
     std::vector<SHA256_Hash> ShaHashes {};
 
     std::vector<std::vector<uint32_t>> Prefixes {};
@@ -88,17 +88,19 @@ private:
     size_t SuffixPos {};
 
     using FilterWord = size_t;
-    std::vector<FilterWord> Filter {};
+    std::vector<FilterWord> SuffixFilter {};
 
-    std::vector<uint32_t> HashIndices {};
-    std::vector<uint32_t> HashBuckets {};
-    std::vector<uint8_t> SubHashes {};
+    // Using 64-bit indices would increase the memory usage from 5n to 9n
+    // For 2^32 values, this would increase usage from 20GB to 36GB
+    // So unless you have a huge amount of RAM, stick with a max of 2^32
+    using SuffixIndex = uint32_t;
+    std::vector<SuffixIndex> SuffixIndices {};
+    std::vector<SuffixIndex> SuffixBuckets {};
+    std::vector<uint8_t> SuffixBucketEntries {};
 
     uint64_t TeraHashTotal = 0;
     uint64_t HashSubTotal = 0;
 
-    std::atomic<size_t> TotalEntries = 0;
-    std::atomic<size_t> TotalChars = 0;
     std::mutex MatchLock;
 };
 
@@ -125,10 +127,12 @@ static inline void bit_set(T* bits, size_t index)
     bits[index / Radix] |= (T(1) << (index % Radix));
 }
 
-void Collider::PushPrefix(const std::string* suffixes, const Adler32::HashPart* suffixes2, size_t suffix_count)
+void Collider::PushPrefix(std::span<const std::string> suffixes, std::span<const Adler32::HashPart> adlers)
 {
-    const std::vector<uint32_t>& prefixes = Prefixes[PrefixPos];
-    CurrentParts[PrefixPos] = {suffixes, suffix_count};
+    size_t suffix_count = suffixes.size();
+
+    std::span<const uint32_t> prefixes = Prefixes[PrefixPos];
+    CurrentParts[PrefixPos] = suffixes;
 
     ++PrefixPos;
     std::vector<uint32_t>& hashes = Prefixes[PrefixPos];
@@ -138,7 +142,7 @@ void Collider::PushPrefix(const std::string* suffixes, const Adler32::HashPart* 
 
     for (size_t i = 0; i < suffix_count; ++i)
     {
-        HashForward(prefixes.data(), &hashes[i * prefix_count], prefix_count, suffixes2[i]);
+        HashForward(prefixes.data(), &hashes[i * prefix_count], prefix_count, adlers[i]);
     }
 }
 
@@ -147,25 +151,22 @@ void Collider::PopPrefix()
     --PrefixPos;
 }
 
-void Collider::PushSuffix(const std::string* prefixes, size_t prefix_count)
+void Collider::PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string> prefixes)
 {
-    size_t suffix_count = Suffixes.size();
+    size_t prefix_count = prefixes.size();
+    size_t suffix_count = hashes.size();
+    hashes.resize(suffix_count * prefix_count);
 
-    std::vector<uint32_t> suffixes;
-    suffixes.resize(suffix_count * prefix_count);
-
-    for (size_t i = 0; i < prefix_count; ++i)
+    for (size_t i = prefix_count; i--;)
     {
         std::string_view prefix = prefixes[i];
 
         HashReverse(
-            Suffixes.data(), &suffixes[i * suffix_count], suffix_count, (const uint8_t*) prefix.data(), prefix.size());
+            hashes.data(), &hashes[i * suffix_count], suffix_count, (const uint8_t*) prefix.data(), prefix.size());
     }
 
-    Suffixes.swap(suffixes);
-
     --SuffixPos;
-    CurrentParts[SuffixPos] = {prefixes, prefix_count};
+    CurrentParts[SuffixPos] = prefixes;
 }
 
 void Collider::_GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t prefix_count) const
@@ -197,7 +198,7 @@ void Collider::GetPrefix(StringBuffer& buffer, size_t index) const
 
 size_t Collider::GetSuffix(StringBuffer& buffer, size_t index) const
 {
-    size_t suffix_count = SubHashes.size();
+    size_t suffix_count = SuffixBucketEntries.size();
 
     for (size_t i = SuffixPos; i != Parts.size(); ++i)
     {
@@ -225,14 +226,16 @@ size_t Collider::GetSuffix(StringBuffer& buffer, size_t index) const
 //
 // The radix sort could be replaced with a different partitioning scheme,
 // but this seems unnecessary given that the hashes are expected to be randomly distributed.
-static void SortHashesWithIndices(ThreadPool& pool, uint32_t* hashes, uint32_t* indices, size_t count, uint32_t bit)
+template <typename Index>
+static void SortHashesWithIndices(
+    ThreadPool& pool, uint32_t* hashes, Index* indices, size_t count, uint32_t bit = std::numeric_limits<Index>::digits)
 {
     if ((bit == 0) || (count < 16))
     {
         for (size_t i = 1; i < count; ++i)
         {
             uint32_t hash = hashes[i];
-            uint32_t index = indices[i];
+            Index index = indices[i];
 
             size_t j = i;
 
@@ -260,7 +263,7 @@ static void SortHashesWithIndices(ThreadPool& pool, uint32_t* hashes, uint32_t* 
 
         if (hash & mask)
         {
-            uint32_t index = indices[i];
+            Index index = indices[i];
 
             do
             {
@@ -304,7 +307,7 @@ static double DeltaSeconds(Stopwatch::time_point t1, Stopwatch::time_point t2)
 
 void Collider::AddHash(uint32_t adler, SHA256_Hash sha)
 {
-    Suffixes.push_back(adler);
+    AdlerHashes.push_back(adler);
     ShaHashes.push_back(sha);
 }
 
@@ -322,17 +325,17 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
 {
     for (const auto& part : Parts)
     {
-        std::vector<Adler32::HashPart> adler {};
+        AdlerParts.emplace_back();
 
         for (const auto& str : part)
-            adler.push_back(Adler32::Preprocess((const uint8_t*) str.data(), str.size()));
-
-        AdlerParts.push_back(adler);
+            AdlerParts.back().push_back(Adler32::Preprocess((const uint8_t*) str.data(), str.size()));
     }
 
     uint32_t seed = 1;
     Prefixes.resize(Parts.size() + 1);
     Prefixes[0] = {seed};
+
+    std::vector<uint32_t> suffixes = AdlerHashes;
 
     PrefixPos = 0;
     SuffixPos = Parts.size();
@@ -341,11 +344,11 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
 
     while (PrefixPos != SuffixPos)
     {
-        const std::vector<std::string>& next_prefix = Parts[PrefixPos];
-        const std::vector<std::string>& next_suffix = Parts[SuffixPos - 1];
+        std::span<const std::string> next_prefix = Parts[PrefixPos];
+        std::span<const std::string> next_suffix = Parts[SuffixPos - 1];
 
         size_t next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
-        size_t next_suffix_size = Suffixes.size() * next_suffix.size();
+        size_t next_suffix_size = suffixes.size() * next_suffix.size();
 
         bool more_prefixes = next_prefix_size < prefix_table_size;
         bool more_suffixes = next_suffix_size < suffix_table_size;
@@ -359,12 +362,12 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
         if (more_prefixes)
         {
             printf("Expanding Prefixes %zu\n", PrefixPos);
-            PushPrefix(next_prefix.data(), AdlerParts[PrefixPos].data(), next_prefix.size());
+            PushPrefix(next_prefix, AdlerParts[PrefixPos]);
         }
         else if (more_suffixes)
         {
             printf("Expanding Suffixes %zu\n", SuffixPos - 1);
-            PushSuffix(next_suffix.data(), next_suffix.size());
+            PushSuffix(suffixes, next_suffix);
         }
         else
         {
@@ -373,59 +376,53 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
     }
 
     size_t prefix_count = Prefixes[PrefixPos].size();
-    size_t suffix_count = Suffixes.size();
+    size_t suffix_count = suffixes.size();
 
-    HashIndices.resize(suffix_count);
+    SuffixIndices.resize(suffix_count);
 
     for (size_t i = 0; i < suffix_count; ++i)
-        HashIndices[i] = static_cast<uint32_t>(i);
+        SuffixIndices[i] = static_cast<SuffixIndex>(i);
 
     auto start = Stopwatch::now();
 
     printf("Building suffix lookup...\n");
-    SortHashesWithIndices(*Pool, Suffixes.data(), HashIndices.data(), suffix_count, 32);
+    SortHashesWithIndices(*Pool, suffixes.data(), SuffixIndices.data(), suffix_count);
     Pool->wait();
 
     printf("Building suffix filter...\n");
 
     // Create using sorted hashes to improve cache hits
     constexpr size_t FilterRadix = sizeof(FilterWord) * CHAR_BIT;
-    Filter.resize(1 + (UINT32_MAX / FilterRadix));
+    SuffixFilter.resize(1 + (UINT32_MAX / FilterRadix));
 
     for (size_t i = 0; i < suffix_count; ++i)
-        bit_set(Filter.data(), Suffixes[i]);
+        bit_set(SuffixFilter.data(), suffixes[i]);
 
     printf("Building suffix buckets...\n");
 
     constexpr size_t NumBuckets = 0x1000000;
-
-    HashBuckets.resize(NumBuckets + 1);
-    SubHashes.resize(Suffixes.size());
+    SuffixBuckets.resize(NumBuckets + 1);
+    SuffixBucketEntries.resize(suffixes.size());
 
     size_t here = 0;
 
     for (size_t i = 0; i < NumBuckets; ++i)
     {
-        for (; here < Suffixes.size(); ++here)
+        for (; here < suffixes.size(); ++here)
         {
-            uint32_t hash = Suffixes[here];
+            uint32_t hash = suffixes[here];
 
             if ((hash >> 8) > i)
                 break;
 
-            SubHashes[here] = hash & 0xFF;
+            SuffixBucketEntries[here] = hash & 0xFF;
         }
 
-        HashBuckets[i + 1] = static_cast<uint32_t>(here);
+        SuffixBuckets[i + 1] = static_cast<SuffixIndex>(here);
     }
 
     auto delta = DeltaSeconds(start, Stopwatch::now());
-
-    printf("Built lookup in %.2f seconds\n", delta);
-
-    Suffixes = {};
-
-    printf("Compiled: %zu/%zu (%zu/%zu)\n", PrefixPos, SuffixPos, prefix_count, suffix_count);
+    printf("Compiled: %zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, prefix_count, suffix_count, delta);
 }
 
 static std::atomic_bool g_Running = true;
@@ -447,7 +444,7 @@ void Collider::Match(size_t start, size_t count)
     if (count == 0)
         return;
 
-    const FilterWord* filter = Filter.data();
+    const FilterWord* filter = SuffixFilter.data();
     const uint32_t* hashes = Prefixes[PrefixPos].data();
 
     size_t i = start;
@@ -481,16 +478,16 @@ void Collider::AddMatch(size_t index, uint32_t hash)
     size_t hash_bucket = hash >> 8;
     uint8_t sub_hash = hash & 0xFF;
 
-    const uint8_t* subs = SubHashes.data();
-    const uint8_t* start = &subs[HashBuckets[hash_bucket]];
-    const uint8_t* end = &subs[HashBuckets[hash_bucket + 1]];
+    const uint8_t* subs = SuffixBucketEntries.data();
+    const uint8_t* start = &subs[SuffixBuckets[hash_bucket]];
+    const uint8_t* end = &subs[SuffixBuckets[hash_bucket + 1]];
     const uint8_t* find = std::find(start, end, sub_hash);
 
     for (; (find != end) && (*find == sub_hash); ++find)
     {
         StringBuffer match;
         GetPrefix(match, index);
-        size_t target = GetSuffix(match, HashIndices[find - subs]);
+        size_t target = GetSuffix(match, SuffixIndices[find - subs]);
 
         std::string_view value = match.str();
         SHA256_Hash sha = SHA256_Hash::Hash(value.data(), value.size());
@@ -501,9 +498,7 @@ void Collider::AddMatch(size_t index, uint32_t hash)
 
             if (auto [iter, added] = FoundStrings.emplace(value); added)
             {
-                printf("Found %.*s\n", (int) value.size(), value.data());
-                ++TotalEntries;
-                TotalChars += value.size();
+                printf("> %.*s\n", (int) value.size(), value.data());
             }
         }
     }
@@ -518,18 +513,15 @@ void Collider::Collide()
 
     if (PrefixPos == SuffixPos)
     {
-        [[maybe_unused]] size_t before = TotalEntries;
         Match();
-        [[maybe_unused]] size_t after = TotalEntries;
 
-        uint64_t checks = static_cast<uint64_t>(Prefixes[PrefixPos].size()) * static_cast<uint64_t>(SubHashes.size());
+        uint64_t checks =
+            static_cast<uint64_t>(Prefixes[PrefixPos].size()) * static_cast<uint64_t>(SuffixBucketEntries.size());
 
         const uint64_t TeraHash = UINT64_C(1000000000000);
         uint64_t accumulator = HashSubTotal + checks;
         TeraHashTotal += accumulator / TeraHash;
         HashSubTotal = accumulator % TeraHash;
-
-        // printf("Matches %zu/%zu (%zu MB), %llu tH\n", after - before, after, found.TotalChars >> 20, TeraHashTotal);
     }
     else
     {
@@ -538,7 +530,7 @@ void Collider::Collide()
             if (!g_Running)
                 return;
 
-            PushPrefix(&Parts[PrefixPos][i], &AdlerParts[PrefixPos][i], 1);
+            PushPrefix({&Parts[PrefixPos][i], 1}, {&AdlerParts[PrefixPos][i], 1});
             Collide();
             PopPrefix();
         }
