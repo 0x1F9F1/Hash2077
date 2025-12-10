@@ -7,7 +7,7 @@
 
 class ThreadPool {
 public:
-    ThreadPool(size_t num_threads = 0);
+    ThreadPool(bool background, size_t num_threads = 0);
     ~ThreadPool();
 
     ThreadPool(const ThreadPool&) = delete;

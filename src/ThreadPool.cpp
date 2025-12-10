@@ -1,6 +1,9 @@
 #include "ThreadPool.h"
 
-ThreadPool::ThreadPool(size_t num_threads)
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+
+ThreadPool::ThreadPool(bool background, size_t num_threads)
 {
     if (num_threads == 0)
         num_threads = std::max<size_t>(4, std::thread::hardware_concurrency());
@@ -9,7 +12,12 @@ ThreadPool::ThreadPool(size_t num_threads)
 
     for (size_t i = 0; i < num_threads; ++i)
     {
-        Workers.emplace_back([this] { Runner(); });
+        Workers.emplace_back([this, background] {
+            if (background)
+                SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+
+            Runner();
+        });
     }
 }
 
@@ -61,7 +69,7 @@ void ThreadPool::partition(size_t total, size_t partition, std::function<void(si
         }
     };
 
-    run(std::cref(worker), std::min(Workers.size(), (total + partition - 1) / partition));
+    run(std::cref(worker), (std::min)(Workers.size(), (total + partition - 1) / partition));
 
     wait();
 }

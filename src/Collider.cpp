@@ -46,8 +46,8 @@ public:
     void NextPart();
     void AddString(const char* data);
 
-    void Compile(size_t prefix_table_size, size_t suffix_table_size);
-    void Collide();
+    void Compile(size_t batch_size, size_t lookup_size);
+    void Collide(bool outer = true);
 
     uint64_t GetTotalTeraHashes() const
     {
@@ -321,7 +321,7 @@ void Collider::AddString(const char* data)
     Parts.back().emplace_back(data);
 }
 
-void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
+void Collider::Compile(size_t batch_size, size_t lookup_size)
 {
     for (const auto& part : Parts)
     {
@@ -350,8 +350,8 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
         size_t next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
         size_t next_suffix_size = suffixes.size() * next_suffix.size();
 
-        bool more_prefixes = next_prefix_size < prefix_table_size;
-        bool more_suffixes = next_suffix_size < suffix_table_size;
+        bool more_prefixes = next_prefix_size < batch_size;
+        bool more_suffixes = next_suffix_size < lookup_size;
 
         if (more_prefixes && more_suffixes)
         {
@@ -422,7 +422,8 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
     }
 
     auto delta = DeltaSeconds(start, Stopwatch::now());
-    printf("Compiled: %zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, prefix_count, suffix_count, delta);
+    printf("Compiled: %zu/%zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, Parts.size(), prefix_count,
+        suffix_count, delta);
 }
 
 static std::atomic_bool g_Running = true;
@@ -504,7 +505,7 @@ void Collider::AddMatch(size_t index, uint32_t hash)
     }
 }
 
-void Collider::Collide()
+void Collider::Collide(bool outer)
 {
     if (!g_Running)
         return;
@@ -525,13 +526,32 @@ void Collider::Collide()
     }
     else
     {
-        for (size_t i = 0; i < Parts[PrefixPos].size(); ++i)
+        std::span<const std::string> parts = Parts[PrefixPos];
+        std::span<const Adler32::HashPart> adler_parts = AdlerParts[PrefixPos];
+
+        auto start = Stopwatch::now();
+        auto total = TeraHashTotal;
+
+        for (size_t i = 0; i < parts.size(); ++i)
         {
             if (!g_Running)
                 return;
 
-            PushPrefix({&Parts[PrefixPos][i], 1}, {&AdlerParts[PrefixPos][i], 1});
-            Collide();
+            if (outer)
+            {
+                auto now = Stopwatch::now();
+
+                if (auto delta = DeltaSeconds(start, now); delta > 60.0f)
+                {
+                    printf("Searching... (%.2f%%, %.2f tH/s)\n", static_cast<double>(i) / static_cast<double>(parts.size()),
+                        static_cast<double>(TeraHashTotal - total) / delta);
+                    start = now;
+                    total = TeraHashTotal;
+                }
+            }
+
+            PushPrefix({&parts[i], 1}, {&adler_parts[i], 1});
+            Collide(false);
             PopPrefix();
         }
     }
@@ -600,7 +620,7 @@ size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_
 
     auto start = Stopwatch::now();
 
-    ThreadPool pool {num_threads};
+    ThreadPool pool {true, num_threads};
 
     collider->Pool = &pool;
     // printf("Compiling...\n");

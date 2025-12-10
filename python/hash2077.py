@@ -50,9 +50,9 @@ class Hash2077:
 			for sha, name in sorted(self.known.items(), key=lambda x:x[1]):
 				f.write(f'{sha.hex().upper()} {name}\n')
 
-	def collide(self, hashes, parts, num_threads, prefix_size, suffix_size):
-		assert prefix_size <= 2**32
-		assert suffix_size <= 2**32
+	def collide(self, hashes, parts, num_threads, batch_size, lookup_size):
+		assert batch_size <= 2**32
+		assert lookup_size <= 2**32
 
 		collider = self.Collider_Create()
 		results = []
@@ -63,12 +63,10 @@ class Hash2077:
 
 		for part in parts:
 			self.Collider_NextPart(collider)
-			if isinstance(part, str):
-				part = [part]
 			for value in part:
 				self.Collider_AddString(collider, value.encode('ascii'))
 
-		num_results = self.Collider_Run(collider, num_threads, prefix_size, prefix_size)
+		num_results = self.Collider_Run(collider, num_threads, batch_size, lookup_size)
 		raw_results = (c_char_p * num_results)()
 		self.Collider_GetResults(collider, raw_results)
 
