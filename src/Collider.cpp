@@ -6,16 +6,20 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
 
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
+#ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    include <Windows.h>
+#endif
 
 struct StringBuffer
 {
@@ -543,7 +547,8 @@ void Collider::Collide(bool outer)
 
                 if (auto delta = DeltaSeconds(start, now); delta > 60.0f)
                 {
-                    printf("Searching... (%.2f%%, %.2f tH/s)\n", static_cast<double>(i) / static_cast<double>(parts.size()),
+                    printf("Searching... (%.2f%%, %.2f tH/s)\n",
+                        static_cast<double>(i) / static_cast<double>(parts.size()),
                         static_cast<double>(TeraHashTotal - total) / delta);
                     start = now;
                     total = TeraHashTotal;
@@ -571,6 +576,7 @@ void Collider::HashReverse(
     });
 }
 
+#ifdef _WIN32
 static BOOL WINAPI CtrlHandler(DWORD fdwCtrlType)
 {
     if (fdwCtrlType == CTRL_C_EVENT)
@@ -585,6 +591,7 @@ static BOOL WINAPI CtrlHandler(DWORD fdwCtrlType)
 
     return FALSE;
 }
+#endif
 
 Collider* Collider_Create()
 {
@@ -616,7 +623,9 @@ void Collider_AddString(Collider* collider, const char* string)
 size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_size, size_t suffix_table_size)
 {
     g_Running = true;
+#ifdef _WIN32
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
+#endif
 
     auto start = Stopwatch::now();
 
@@ -634,10 +643,13 @@ size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_
 
     size_t total = collider->FoundStrings.size();
 
-    printf("Found %llu results in %.2f seconds, %llu tH @ %.2f tH/s\n", total, delta, collider->GetTotalTeraHashes(),
+    printf("Found %zu results in %.2f seconds, %" PRIu64 " tH @ %.2f tH/s\n", total, delta,
+        collider->GetTotalTeraHashes(),
         static_cast<double>(collider->GetTotalTeraHashes()) / static_cast<double>(delta));
 
+#ifdef _WIN32
     SetConsoleCtrlHandler(CtrlHandler, FALSE);
+#endif
 
     return total;
 }

@@ -1,3 +1,4 @@
+import os
 from ctypes import *
 from pathlib import Path
 from hashlib import sha256
@@ -12,7 +13,7 @@ class Hash2077:
 		script_path = Path(__file__).resolve().parent
 
 		if dll_path is None:
-			dll_path = script_path / "hash2077.dll"
+		    dll_path = script_path / ("hash2077.dll" if os.name == 'nt' else "libhash2077.so")
 
 		self.lib = cdll.LoadLibrary(dll_path)
 

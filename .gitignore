@@ -252,5 +252,6 @@ __pycache__/
 *.pyc
 
 python/*.dll
+python/*.so
 python/*.txt
 python/cyberpunk2077_addresses.json

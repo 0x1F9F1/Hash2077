@@ -1,8 +1,13 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
-#define COLLIDERAPI __declspec(dllexport)
+#ifdef _WIN32
+#    define COLLIDERAPI __declspec(dllexport)
+#else
+#    define COLLIDERAPI __attribute__((__visibility__("default")))
+#endif
 
 struct Collider;
 

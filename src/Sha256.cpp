@@ -3,6 +3,26 @@
 #include <cstring>
 #include <immintrin.h>
 
+#ifndef _MSC_VER
+static inline void _storebe_i32(void* __P, int __D)
+{
+    struct __storeu_i32
+    {
+        unsigned int __v;
+    } __attribute__((__packed__, __may_alias__));
+    ((struct __storeu_i32*) __P)->__v = __builtin_bswap32((unsigned int) __D);
+}
+
+static inline void _storebe_i64(void* __P, long long __D)
+{
+    struct __storeu_i64
+    {
+        unsigned long long __v;
+    } __attribute__((__packed__, __may_alias__));
+    ((struct __storeu_i64*) __P)->__v = __builtin_bswap64((unsigned long long) __D);
+}
+#endif
+
 struct SHA256_CTX
 {
     uint8_t data[64];

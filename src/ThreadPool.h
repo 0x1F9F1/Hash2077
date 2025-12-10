@@ -5,7 +5,8 @@
 #include <mutex>
 #include <thread>
 
-class ThreadPool {
+class ThreadPool
+{
 public:
     ThreadPool(bool background, size_t num_threads = 0);
     ~ThreadPool();
@@ -22,7 +23,8 @@ public:
 private:
     void Runner();
 
-    struct Task {
+    struct Task
+    {
         std::function<void()> Func;
         size_t Repeat = 0;
     };

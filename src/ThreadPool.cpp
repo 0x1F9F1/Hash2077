@@ -1,7 +1,9 @@
 #include "ThreadPool.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
+#ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    include <Windows.h>
+#endif
 
 ThreadPool::ThreadPool(bool background, size_t num_threads)
 {
@@ -13,8 +15,10 @@ ThreadPool::ThreadPool(bool background, size_t num_threads)
     for (size_t i = 0; i < num_threads; ++i)
     {
         Workers.emplace_back([this, background] {
+#ifdef _WIN32
             if (background)
                 SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
 
             Runner();
         });

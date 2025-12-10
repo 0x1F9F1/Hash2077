@@ -54,7 +54,7 @@ void Adler32::HashForward(const uint32_t* input, uint32_t* output, size_t count,
         a = _mm256_sub_epi32(a, _mm256_and_si256(_mm256_cmpgt_epi32(a, maxval), modulo));
         b = _mm256_sub_epi32(b, _mm256_and_si256(_mm256_cmpgt_epi32(b, maxval), modulo));
 
-        hashes = _mm256_or_epi32(a, _mm256_slli_epi32(b, 16));
+        hashes = _mm256_or_si256(a, _mm256_slli_epi32(b, 16));
         _mm256_storeu_si256((__m256i*) &output[here], hashes);
     }
 #else
