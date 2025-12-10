@@ -6,7 +6,7 @@
 #    include <xmmintrin.h>
 #endif
 
-Adler32::HashPart Adler32::Preprocess(const uint8_t* __restrict data, size_t length)
+Adler32::HashPart Adler32::Preprocess(const uint8_t* data, size_t length)
 {
     uint32_t a = 0;
     uint32_t b = 0;
@@ -21,7 +21,7 @@ Adler32::HashPart Adler32::Preprocess(const uint8_t* __restrict data, size_t len
     return {static_cast<uint16_t>(a % 65521), static_cast<uint16_t>(b % 65521), static_cast<uint16_t>(length)};
 }
 
-void Adler32::HashForward(const uint32_t* __restrict input, uint32_t* __restrict output, size_t count, HashPart suffix)
+void Adler32::HashForward(const uint32_t* input, uint32_t* output, size_t count, HashPart suffix)
 {
     size_t here = 0;
 
@@ -107,8 +107,8 @@ void Adler32::HashForward(const uint32_t* __restrict input, uint32_t* __restrict
     }
 }
 
-void Adler32::HashReverse(const uint32_t* __restrict input, uint32_t* __restrict output, size_t count,
-    const uint8_t* __restrict suffix, size_t suffix_length)
+void Adler32::HashReverse(
+    const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length)
 {
     size_t here = 0;
 

@@ -2,6 +2,7 @@ import sys
 import json
 
 from hash2077 import Hash2077
+import mangle
 
 SEG_CODE = '0001' # .text (code)
 SEG_RDATA = '0002' # .rdata (read-only data)
@@ -18,7 +19,7 @@ for x in addresses['Addresses']:
 
 hasher = Hash2077()
 
-def collide(segments, *parts, num_threads=0, prefix_size=2**28, suffix_size=2**30):
+def collide(segments, *parts, num_threads=0, prefix_size=2**28, suffix_size=2**31):
     hashes = [ (adler, sha) for seg, off, adler, sha in all_hashes if ((not segments) or (seg in segments)) ]
     return hasher.collide(hashes, parts, num_threads, prefix_size, suffix_size)
 
@@ -35,12 +36,13 @@ def dynamic_ctor_dtors():
 def unwinds():
     collide({ SEG_RDATA }, [ "$unwind$" ] + [ f"$chain${i}$" for i in range(16) ], hasher.known.values())
 
-def lns():
-    collide({ SEG_CODE }, [ f'$LN{i}' for i in range(9999) ])
-
-def reals32():
-    collide({ SEG_RDATA }, "__real@", *rep(list("0123456789abcdef"), 8))
-
-reals32()
+def strlits():
+    import csv
+    strings = []
+    with open('strings.csv', newline='', encoding='ascii', errors='replace') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            strings.append(mangle.strlit(row['String Value'].encode('ascii', errors='replace')))
+    collide({ SEG_RDATA }, strings)
 
 hasher.save()

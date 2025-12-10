@@ -361,12 +361,12 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
 
         if (more_prefixes)
         {
-            printf("Expanding Prefixes %zu\n", PrefixPos);
+            // printf("Expanding Prefixes %zu\n", PrefixPos);
             PushPrefix(next_prefix, AdlerParts[PrefixPos]);
         }
         else if (more_suffixes)
         {
-            printf("Expanding Suffixes %zu\n", SuffixPos - 1);
+            // printf("Expanding Suffixes %zu\n", SuffixPos - 1);
             PushSuffix(suffixes, next_suffix);
         }
         else
@@ -385,11 +385,11 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
 
     auto start = Stopwatch::now();
 
-    printf("Building suffix lookup...\n");
+    // printf("Building suffix lookup...\n");
     SortHashesWithIndices(*Pool, suffixes.data(), SuffixIndices.data(), suffix_count);
     Pool->wait();
 
-    printf("Building suffix filter...\n");
+    // printf("Building suffix filter...\n");
 
     // Create using sorted hashes to improve cache hits
     constexpr size_t FilterRadix = sizeof(FilterWord) * CHAR_BIT;
@@ -398,7 +398,7 @@ void Collider::Compile(size_t prefix_table_size, size_t suffix_table_size)
     for (size_t i = 0; i < suffix_count; ++i)
         bit_set(SuffixFilter.data(), suffixes[i]);
 
-    printf("Building suffix buckets...\n");
+    // printf("Building suffix buckets...\n");
 
     constexpr size_t NumBuckets = 0x1000000;
     SuffixBuckets.resize(NumBuckets + 1);
@@ -603,16 +603,14 @@ size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_
     ThreadPool pool {num_threads};
 
     collider->Pool = &pool;
-    printf("Compiling...\n");
+    // printf("Compiling...\n");
     collider->Compile(prefix_table_size, suffix_table_size);
 
-    printf("Searching\n");
+    printf("Searching... (press Ctrl+C to stop)\n");
     collider->Collide();
     collider->Pool = nullptr;
 
     auto delta = DeltaSeconds(start, Stopwatch::now());
-
-    printf("Done!\n");
 
     size_t total = collider->FoundStrings.size();
 
