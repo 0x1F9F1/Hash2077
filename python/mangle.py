@@ -24,6 +24,6 @@ def strlit(x):
 	result.append('??_C@_0')
 	result.append(number(len(withnul)))
 	result.append(number(crc32(withnul) ^ 0xFFFFFFFF))
-	result.extend(CHARMAP[v] for v in x[:32])
+	result.extend(CHARMAP[v] for v in x[:31])
 	result.append('@')
 	return ''.join(result)

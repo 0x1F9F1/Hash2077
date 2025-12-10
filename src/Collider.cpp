@@ -62,10 +62,10 @@ public:
     std::unordered_set<std::string> FoundStrings;
 
 private:
-    void PushPrefix(std::span<const std::string> suffixes, std::span<const Adler32::HashPart> adlers);
+    void PushPrefix(std::span<const std::string_view> suffixes, std::span<const Adler32::HashPart> adlers);
     void PopPrefix();
 
-    void PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string> prefixes);
+    void PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string_view> prefixes);
 
     void GetPrefix(StringBuffer& buffer, size_t index) const;
     void _GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t prefix_count) const;
@@ -79,14 +79,18 @@ private:
     void HashReverse(
         const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length) const;
 
-    std::vector<std::vector<std::string>> Parts {};
+    std::unordered_set<std::string> InputStrings {};
+    std::vector<std::vector<std::string_view>> Parts {};
     std::vector<std::vector<Adler32::HashPart>> AdlerParts {};
 
     std::vector<uint32_t> AdlerHashes {};
     std::vector<SHA256_Hash> ShaHashes {};
 
     std::vector<std::vector<uint32_t>> Prefixes {};
-    std::vector<std::span<const std::string>> CurrentParts {};
+    std::vector<std::span<const std::string_view>> CurrentParts {};
+
+    size_t BatchSize {};
+    size_t LookupSize {};
 
     size_t PrefixPos {};
     size_t SuffixPos {};
@@ -131,7 +135,7 @@ static inline void bit_set(T* bits, size_t index)
     bits[index / Radix] |= (T(1) << (index % Radix));
 }
 
-void Collider::PushPrefix(std::span<const std::string> suffixes, std::span<const Adler32::HashPart> adlers)
+void Collider::PushPrefix(std::span<const std::string_view> suffixes, std::span<const Adler32::HashPart> adlers)
 {
     size_t suffix_count = suffixes.size();
 
@@ -155,7 +159,7 @@ void Collider::PopPrefix()
     --PrefixPos;
 }
 
-void Collider::PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string> prefixes)
+void Collider::PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string_view> prefixes)
 {
     size_t prefix_count = prefixes.size();
     size_t suffix_count = hashes.size();
@@ -322,11 +326,14 @@ void Collider::NextPart()
 
 void Collider::AddString(const char* data)
 {
-    Parts.back().emplace_back(data);
+    Parts.back().emplace_back(*InputStrings.emplace(data).first);
 }
 
 void Collider::Compile(size_t batch_size, size_t lookup_size)
 {
+    BatchSize = batch_size;
+    LookupSize = lookup_size;
+
     for (const auto& part : Parts)
     {
         AdlerParts.emplace_back();
@@ -348,14 +355,14 @@ void Collider::Compile(size_t batch_size, size_t lookup_size)
 
     while (PrefixPos != SuffixPos)
     {
-        std::span<const std::string> next_prefix = Parts[PrefixPos];
-        std::span<const std::string> next_suffix = Parts[SuffixPos - 1];
+        std::span<const std::string_view> next_prefix = Parts[PrefixPos];
+        std::span<const std::string_view> next_suffix = Parts[SuffixPos - 1];
 
         size_t next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
         size_t next_suffix_size = suffixes.size() * next_suffix.size();
 
-        bool more_prefixes = next_prefix_size < batch_size;
-        bool more_suffixes = next_suffix_size < lookup_size;
+        bool more_prefixes = next_prefix_size < BatchSize;
+        bool more_suffixes = next_suffix_size < LookupSize;
 
         if (more_prefixes && more_suffixes)
         {
@@ -530,34 +537,37 @@ void Collider::Collide(bool outer)
     }
     else
     {
-        std::span<const std::string> parts = Parts[PrefixPos];
+        std::span<const std::string_view> parts = Parts[PrefixPos];
         std::span<const Adler32::HashPart> adler_parts = AdlerParts[PrefixPos];
 
         auto start = Stopwatch::now();
         auto total = TeraHashTotal;
+        auto next_update = 10.0;
 
-        for (size_t i = 0; i < parts.size(); ++i)
+        size_t step = BatchSize / parts.size();
+
+        for (size_t i = 0; i < parts.size();)
         {
             if (!g_Running)
                 return;
 
             if (outer)
             {
-                auto now = Stopwatch::now();
-
-                if (auto delta = DeltaSeconds(start, now); delta > 60.0f)
+                if (auto delta = DeltaSeconds(start, Stopwatch::now()); delta >= next_update)
                 {
-                    printf("Searching... (%.2f%%, %.2f tH/s)\n",
-                        static_cast<double>(i) / static_cast<double>(parts.size()),
+                    auto done = static_cast<double>(i) / static_cast<double>(parts.size());
+                    auto remaining = (delta / done) - delta;
+                    printf("# %5.2f%%, %4.1f mins remaining @ %.2f tH/s\n", done * 100.0f, remaining / 60.0f,
                         static_cast<double>(TeraHashTotal - total) / delta);
-                    start = now;
-                    total = TeraHashTotal;
+                    next_update += (std::min)(10.0f + next_update * 0.1, (std::clamp)(remaining * 0.5f, 30.0, 300.0));
                 }
             }
 
-            PushPrefix({&parts[i], 1}, {&adler_parts[i], 1});
+            size_t n = (std::min)(step, parts.size() - i);
+            PushPrefix({&parts[i], n}, {&adler_parts[i], n});
             Collide(false);
             PopPrefix();
+            i += n;
         }
     }
 }

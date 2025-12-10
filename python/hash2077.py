@@ -1,4 +1,5 @@
 import os
+import json
 from ctypes import *
 from pathlib import Path
 from hashlib import sha256
@@ -8,12 +9,30 @@ class _Collider(Structure):
 
 c_collider = POINTER(_Collider)
 
+_script_path = Path(__file__).resolve().parent
+
+def load_known(path=None):
+	known = {}
+	with open(path or (_script_path / 'data/known.txt'), 'r') as f:
+		for line in f.read().splitlines():
+			sha, name = line.split(' ')
+			sha = bytes.fromhex(sha)
+			known[sha] = name
+	return known
+
+def load_addresses(path=None):
+	addrs = []
+	with open(path or (_script_path / 'cyberpunk2077_addresses.json')) as f:
+		data = json.load(f)
+		for x in data['Addresses']:
+			seg, off = x['offset'].split(':')
+			addrs.append((seg, int(off, 16), int(x['hash']), bytes.fromhex(x['secondary hash'])))
+	return addrs
+
 class Hash2077:
 	def __init__(self, dll_path=None):
-		script_path = Path(__file__).resolve().parent
-
 		if dll_path is None:
-		    dll_path = script_path / ("hash2077.dll" if os.name == 'nt' else "libhash2077.so")
+			dll_path = _script_path / ('hash2077.dll' if os.name == 'nt' else 'libhash2077.so')
 
 		self.lib = cdll.LoadLibrary(dll_path)
 
@@ -23,31 +42,20 @@ class Hash2077:
 			func.argtypes = argtypes
 			return func
 
-		self.Collider_Create = load("Collider_Create", c_collider)
-		self.Collider_Destroy = load("Collider_Destroy", None, c_collider)
-		self.Collider_AddHash = load("Collider_AddHash", None, c_collider, c_uint32, c_char_p)
-		self.Collider_NextPart = load("Collider_NextPart", None, c_collider)
-		self.Collider_AddString = load("Collider_AddString", None, c_collider, c_char_p)
-		self.Collider_Run = load("Collider_Run", c_size_t, c_collider, c_size_t, c_size_t, c_size_t)
-		self.Collider_GetResults = load("Collider_GetResults", None, c_collider, POINTER(c_char_p))
-
-		self.data_path = script_path / "data"
-		self.known = self._load_known(self.data_path / "known.txt")
+		self.Collider_Create = load('Collider_Create', c_collider)
+		self.Collider_Destroy = load('Collider_Destroy', None, c_collider)
+		self.Collider_AddHash = load('Collider_AddHash', None, c_collider, c_uint32, c_char_p)
+		self.Collider_NextPart = load('Collider_NextPart', None, c_collider)
+		self.Collider_AddString = load('Collider_AddString', None, c_collider, c_char_p)
+		self.Collider_Run = load('Collider_Run', c_size_t, c_collider, c_size_t, c_size_t, c_size_t)
+		self.Collider_GetResults = load('Collider_GetResults', None, c_collider, POINTER(c_char_p))
+		self.known = load_known()
 
 	def save(self):
-		self._save_known(self.data_path / "known.txt")
-
-	def _load_known(self, path):
-		known = {}
-		with open(path, "r") as f:
-			for line in f.read().splitlines():
-				sha, name = line.split(" ")
-				sha = bytes.fromhex(sha)
-				known[sha] = name
-		return known
+		self._save_known(_script_path / 'data/known.txt')
 
 	def _save_known(self, path):
-		with open(path, "w") as f:
+		with open(path, 'w') as f:
 			for sha, name in sorted(self.known.items(), key=lambda x:x[1]):
 				f.write(f'{sha.hex().upper()} {name}\n')
 
