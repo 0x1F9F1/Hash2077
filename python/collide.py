@@ -16,7 +16,7 @@ def segs(*seg_id):
 def adlers(*adler_ids):
 	return [ (adler, sha) for seg, off, adler, sha in addrs if adler in adler_ids ]
 
-def collide(hashes, *parts, num_threads=0, batch_size=2**28, lookup_size=2**31):
+def collide(hashes, *parts, num_threads=0, batch_size=2**26, lookup_size=2**31):
 	part_lists = []
 	for part in parts:
 		if isinstance(part, str):
@@ -52,7 +52,5 @@ def ctor_dtors():
 	class_names = [ v[4:-5] for v in hasher.known.values() if v.startswith('??_7') ]
 	collide(segs(SEG_CODE), ['??0', '??1'], class_names, '@@', list('AIQEMU'), 'EAA@XZ')
 	collide(segs(SEG_CODE), '??_G', class_names, '@@', list('EMU'), 'EAAPEAXI@Z')
-
-collide(segs(SEG_RDATA), '__real@', *rep(list('0123456789abcdef'), 8))
 
 hasher.save()

@@ -544,7 +544,7 @@ void Collider::Collide(bool outer)
         auto total = TeraHashTotal;
         auto next_update = 10.0;
 
-        size_t step = BatchSize / parts.size();
+        size_t step = BatchSize / Prefixes[PrefixPos].size();
 
         for (size_t i = 0; i < parts.size();)
         {
