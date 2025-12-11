@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #ifdef __AVX2__
 #    include <immintrin.h>
@@ -27,6 +28,40 @@ struct SHA256_Hash
             (data32[6] == other.data32[6]) && (data32[7] == other.data32[7]);
 #endif
     }
+};
 
-    static SHA256_Hash Hash(const void* data, size_t length);
+struct SHA256_CTX
+{
+    uint8_t data[64];
+    size_t datalen = 0;
+    uint64_t bitlen = 0;
+    uint32_t state[8] {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+
+    void Update(const uint8_t* input, size_t len)
+    {
+        while (len > 0)
+        {
+            size_t n = 64 - datalen;
+
+            if (n > len)
+                n = len;
+
+            std::memcpy(&data[datalen], input, n);
+
+            datalen += n;
+            input += n;
+            len -= n;
+
+            if (datalen == 64)
+            {
+                Transform();
+                bitlen += 512;
+                datalen = 0;
+            }
+        }
+    }
+
+    void Transform();
+
+    SHA256_Hash Digest();
 };

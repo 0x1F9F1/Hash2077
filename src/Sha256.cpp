@@ -3,35 +3,15 @@
 #include <cstring>
 #include <immintrin.h>
 
-#ifndef _MSC_VER
-static inline void _storebe_i32(void* __P, int __D)
-{
-    struct __storeu_i32
-    {
-        unsigned int __v;
-    } __attribute__((__packed__, __may_alias__));
-    ((struct __storeu_i32*) __P)->__v = __builtin_bswap32((unsigned int) __D);
-}
+#define ENABLE_SHA_ISA 1
 
-static inline void _storebe_i64(void* __P, long long __D)
-{
-    struct __storeu_i64
-    {
-        unsigned long long __v;
-    } __attribute__((__packed__, __may_alias__));
-    ((struct __storeu_i64*) __P)->__v = __builtin_bswap64((unsigned long long) __D);
-}
+#ifdef _MSC_VER
+#    include <stdlib.h>
+#    pragma intrinsic(_byteswap_uint64)
 #endif
 
-struct SHA256_CTX
-{
-    uint8_t data[64];
-    size_t datalen;
-    uint64_t bitlen;
-    uint32_t state[8];
-};
-
-static void SHA256Transform(SHA256_CTX* ctx, const uint8_t data[])
+#if ENABLE_SHA_ISA
+static void SHA256Transform(uint32_t* state, const uint8_t* data)
 {
     __m128i STATE0, STATE1;
     __m128i MSG, TMP, MASK;
@@ -39,8 +19,8 @@ static void SHA256Transform(SHA256_CTX* ctx, const uint8_t data[])
     __m128i ABEF_SAVE, CDGH_SAVE;
 
     // Load initial values
-    TMP = _mm_loadu_si128((__m128i*) &ctx->state[0]);
-    STATE1 = _mm_loadu_si128((__m128i*) &ctx->state[4]);
+    TMP = _mm_loadu_si128((__m128i*) &state[0]);
+    STATE1 = _mm_loadu_si128((__m128i*) &state[4]);
     MASK = _mm_set_epi64x(0x0c0d0e0f08090a0bULL, 0x0405060700010203ULL);
 
     TMP = _mm_shuffle_epi32(TMP, 0xB1);          // CDAB
@@ -214,83 +194,112 @@ static void SHA256Transform(SHA256_CTX* ctx, const uint8_t data[])
     STATE1 = _mm_alignr_epi8(STATE1, TMP, 8);    // ABEF
 
     // Save state
-    _mm_storeu_si128((__m128i*) &ctx->state[0], STATE0);
-    _mm_storeu_si128((__m128i*) &ctx->state[4], STATE1);
+    _mm_storeu_si128((__m128i*) &state[0], STATE0);
+    _mm_storeu_si128((__m128i*) &state[4], STATE1);
 }
+#else
+#    include <ammintrin.h>
+#    define ROTRIGHT(a, b) _rorx_u32(a, b)
+#    define CH(x, y, z) (((x) & (y)) ^ _andn_u32(x, z))
+#    define MAJ(x, y, z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#    define EP0(x) (ROTRIGHT(x, 2) ^ ROTRIGHT(x, 13) ^ ROTRIGHT(x, 22))
+#    define EP1(x) (ROTRIGHT(x, 6) ^ ROTRIGHT(x, 11) ^ ROTRIGHT(x, 25))
+#    define SIG0(x) (ROTRIGHT(x, 7) ^ ROTRIGHT(x, 18) ^ _shrx_u32(x, 3))
+#    define SIG1(x) (ROTRIGHT(x, 17) ^ ROTRIGHT(x, 19) ^ _shrx_u32(x, 10))
 
-static void SHA256Init(SHA256_CTX* ctx)
-{
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x6a09e667;
-    ctx->state[1] = 0xbb67ae85;
-    ctx->state[2] = 0x3c6ef372;
-    ctx->state[3] = 0xa54ff53a;
-    ctx->state[4] = 0x510e527f;
-    ctx->state[5] = 0x9b05688c;
-    ctx->state[6] = 0x1f83d9ab;
-    ctx->state[7] = 0x5be0cd19;
-}
+static const uint32_t k[64] = {0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+    0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152,
+    0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138,
+    0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70,
+    0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa,
+    0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
-static void SHA256Update(SHA256_CTX* ctx, const uint8_t* data, size_t len)
+static void SHA256Transform(uint32_t* state, const uint8_t* data)
 {
-    while (len > 0)
+    uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
+
+    for (i = 0, j = 0; i < 16; ++i, j += 4)
+        m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
+    for (; i < 64; ++i)
+        m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+    f = state[5];
+    g = state[6];
+    h = state[7];
+
+    for (i = 0; i < 64; ++i)
     {
-        size_t n = 64 - ctx->datalen;
-
-        if (n > len)
-            n = len;
-
-        for (size_t i = 0; i < n; ++i)
-            ctx->data[ctx->datalen + i] = data[i];
-
-        ctx->datalen += n;
-        data += n;
-        len -= n;
-
-        if (ctx->datalen == 64)
-        {
-            SHA256Transform(ctx, ctx->data);
-            ctx->bitlen += 512;
-            ctx->datalen = 0;
-        }
+        t1 = h + EP1(e) + CH(e, f, g) + k[i] + m[i];
+        t2 = EP0(a) + MAJ(a, b, c);
+        h = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
     }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+#endif
+
+void SHA256_CTX::Transform()
+{
+    SHA256Transform(state, data);
 }
 
-static void SHA256Final(SHA256_CTX* ctx, uint8_t hash[])
+SHA256_Hash SHA256_CTX::Digest()
 {
-    size_t i = ctx->datalen;
+    size_t i = datalen;
 
-    if (ctx->datalen < 56)
+    if (datalen < 56)
     {
-        ctx->data[i++] = 0x80;
+        data[i++] = 0x80;
         while (i < 56)
-            ctx->data[i++] = 0x00;
+            data[i++] = 0x00;
     }
     else
     {
-        ctx->data[i++] = 0x80;
+        data[i++] = 0x80;
         while (i < 64)
-            ctx->data[i++] = 0x00;
-        SHA256Transform(ctx, ctx->data);
-        memset(ctx->data, 0, 56);
+            data[i++] = 0x00;
+        Transform();
+        memset(data, 0, 56);
     }
 
-    ctx->bitlen += ctx->datalen * 8;
-    _storebe_i64(&ctx->data[56], ctx->bitlen);
-    SHA256Transform(ctx, ctx->data);
+    bitlen += datalen * 8;
 
-    for (i = 0; i < 8; ++i)
-        _storebe_i32(&hash[i * 4], ctx->state[i]);
-}
+#ifdef _MSC_VER
+    uint64_t bitlen_be = _byteswap_uint64(bitlen);
+#else
+    uint64_t bitlen_be = __builtin_bswap64(bitlen);
+#endif
+    std::memcpy(&data[56], &bitlen_be, sizeof(bitlen_be));
 
-SHA256_Hash SHA256_Hash::Hash(const void* data, size_t length)
-{
-    SHA256_CTX ctx;
-    SHA256Init(&ctx);
-    SHA256Update(&ctx, (const uint8_t*) data, length);
+    Transform();
 
     SHA256_Hash hash;
-    SHA256Final(&ctx, hash.data);
+
+    const __m256i bswap32_shuffle = _mm256_setr_epi8(
+        3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+    _mm256_storeu_si256(
+        (__m256i*) hash.data, _mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i*) state), bswap32_shuffle));
+
     return hash;
 }

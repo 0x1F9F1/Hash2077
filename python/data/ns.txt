@@ -10,6 +10,7 @@
 @AK
 @anim
 @anim@ink
+@app
 @appearance
 @arcade@ui@game
 @ArchetypeSet@AI
@@ -81,6 +82,8 @@
 @GroupNode@data@game
 @grs
 @gsm
+@Helper
+@helper
 @helper@game
 @hit@game
 @hitRepresentationEvents@game
@@ -135,6 +138,7 @@
 @ragdoll@ent
 @red
 @rend
+@rep
 @res
 @rtti
 @save
@@ -152,6 +156,7 @@
 @smart@game
 @smartGun@game
 @snappy
+@spawn
 @squads@AI
 @state@game
 @stateMachine@game
@@ -161,6 +166,7 @@
 @targeting@game
 @targetingSystem@game
 @task@behavior@AI
+@telemetry
 @tempshit
 @text
 @tick
@@ -187,3 +193,4 @@
 @work
 @workspot@work
 @world
+@xml

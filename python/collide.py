@@ -16,7 +16,7 @@ def segs(*seg_id):
 def adlers(*adler_ids):
 	return [ (adler, sha) for seg, off, adler, sha in addrs if adler in adler_ids ]
 
-def collide(hashes, *parts, num_threads=0, batch_size=2**26, lookup_size=2**31):
+def collide(hashes, *parts, num_threads=0, batch_size=2**26, lookup_size=2**30):
 	part_lists = []
 	for part in parts:
 		if isinstance(part, str):
@@ -52,5 +52,8 @@ def ctor_dtors():
 	class_names = [ v[4:-5] for v in hasher.known.values() if v.startswith('??_7') ]
 	collide(segs(SEG_CODE), ['??0', '??1'], class_names, '@@', list('AIQEMU'), 'EAA@XZ')
 	collide(segs(SEG_CODE), '??_G', class_names, '@@', list('EMU'), 'EAAPEAXI@Z')
+
+# names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@")
+# collide(segs(SEG_CODE), ['??0'], ['', 'C', 'I', 'S'], *rep(names, 3), loadlines('data/ns.txt'), '@@', list('AIQ'), 'EAA@XZ')
 
 hasher.save()

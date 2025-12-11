@@ -16,6 +16,7 @@ ThreadPool::ThreadPool(bool background, size_t num_threads)
     {
         Workers.emplace_back([this, background] {
 #ifdef _WIN32
+            // Avoid hogging the CPU, so the system remains responsive
             if (background)
                 SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 #endif

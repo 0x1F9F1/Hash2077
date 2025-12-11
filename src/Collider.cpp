@@ -21,76 +21,76 @@
 #    include <Windows.h>
 #endif
 
-struct StringBuffer
-{
-    char buffer[2048];
-    size_t length = 0;
-
-    void append(const char* data, size_t len)
-    {
-        if (length + len > std::size(buffer))
-        {
-            printf("TOO LONG!\n");
-            throw std::runtime_error("AAAAA");
-        }
-        memcpy(&buffer[length], data, len);
-        length += len;
-    }
-
-    std::string_view str() const
-    {
-        return {buffer, length};
-    }
-};
+using Stopwatch = std::chrono::high_resolution_clock;
 
 struct Collider
 {
 public:
+    Collider(size_t num_threads, size_t batch_size, size_t lookup_size);
+
     void AddHash(uint32_t adler, SHA256_Hash sha);
     void NextPart();
     void AddString(const char* data);
 
-    void Compile(size_t batch_size, size_t lookup_size);
-    void Collide(bool outer = true);
+    void Run();
 
     uint64_t GetTotalTeraHashes() const
     {
-        return TeraHashTotal;
+        return DoneCombinations[1];
     }
 
-    ThreadPool* Pool {};
     std::unordered_set<std::string> FoundStrings;
 
 private:
+    // Using 64-bit indices would increase the memory usage from 5n to 9n
+    // For 2^32 values, this would increase usage from 20GB to 36GB
+    // So unless you have a huge amount of RAM, stick with a max of 2^32
+    // 64-bit division is also slower than 32-bit
+    using IndexType = uint32_t;
+
+    void Preprocess();
+    void CompileSuffixes();
+    void CollideForwards();
+
+    void ReportProgress();
+
     void PushPrefix(std::span<const std::string_view> suffixes, std::span<const Adler32::HashPart> adlers);
     void PopPrefix();
+    void PopSuffix();
 
-    void PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string_view> prefixes);
+    void PushSuffix(std::span<const std::string_view> prefixes);
 
-    void GetPrefix(StringBuffer& buffer, size_t index) const;
-    void _GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t prefix_count) const;
-    size_t GetSuffix(StringBuffer& buffer, size_t index) const;
+    template <typename Func>
+    void GetPrefix(Func& func, IndexType index, size_t i, IndexType prefix_count) const;
+
+    template <typename Func>
+    size_t GetSuffix(Func& func, IndexType index) const;
+
+    template <typename Func>
+    size_t GetString(size_t prefix, size_t suffix, Func&& func);
 
     void Match();
     void Match(size_t start, size_t count);
     void AddMatch(size_t index, uint32_t hash);
 
-    void HashForward(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix) const;
+    void HashForward(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix);
     void HashReverse(
-        const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length) const;
+        const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length);
 
-    std::unordered_set<std::string> InputStrings {};
-    std::vector<std::vector<std::string_view>> Parts {};
+    ThreadPool Pool;
+    size_t BatchSize {};
+    size_t LookupSize {};
+
+    std::unordered_set<std::string> StringPool {};
+    std::vector<std::vector<std::string_view>> StringParts {};
     std::vector<std::vector<Adler32::HashPart>> AdlerParts {};
 
     std::vector<uint32_t> AdlerHashes {};
     std::vector<SHA256_Hash> ShaHashes {};
 
     std::vector<std::vector<uint32_t>> Prefixes {};
+    std::vector<std::vector<uint32_t>> Suffixes {};
     std::vector<std::span<const std::string_view>> CurrentParts {};
-
-    size_t BatchSize {};
-    size_t LookupSize {};
 
     size_t PrefixPos {};
     size_t SuffixPos {};
@@ -98,16 +98,17 @@ private:
     using FilterWord = size_t;
     std::vector<FilterWord> SuffixFilter {};
 
-    // Using 64-bit indices would increase the memory usage from 5n to 9n
-    // For 2^32 values, this would increase usage from 20GB to 36GB
-    // So unless you have a huge amount of RAM, stick with a max of 2^32
-    using SuffixIndex = uint32_t;
-    std::vector<SuffixIndex> SuffixIndices {};
-    std::vector<SuffixIndex> SuffixBuckets {};
+    std::vector<IndexType> SuffixIndices {};
+    std::vector<IndexType> SuffixBuckets {};
     std::vector<uint8_t> SuffixBucketEntries {};
 
-    uint64_t TeraHashTotal = 0;
-    uint64_t HashSubTotal = 0;
+    const uint64_t TeraHash = UINT64_C(1000000000000);
+
+    uint64_t DoneCombinations[2] {};
+    uint64_t TotalCombinations[2] {};
+
+    Stopwatch::time_point StartTime;
+    double NextUpdate = 0.0f;
 
     std::mutex MatchLock;
 };
@@ -159,25 +160,34 @@ void Collider::PopPrefix()
     --PrefixPos;
 }
 
-void Collider::PushSuffix(std::vector<uint32_t>& hashes, std::span<const std::string_view> prefixes)
+void Collider::PopSuffix()
 {
-    size_t prefix_count = prefixes.size();
-    size_t suffix_count = hashes.size();
-    hashes.resize(suffix_count * prefix_count);
+    ++SuffixPos;
+}
 
-    for (size_t i = prefix_count; i--;)
+void Collider::PushSuffix(std::span<const std::string_view> prefixes)
+{
+    std::span<const uint32_t> suffixes = Suffixes[SuffixPos];
+
+    --SuffixPos;
+    std::vector<uint32_t>& hashes = Suffixes[SuffixPos];
+    CurrentParts[SuffixPos] = prefixes;
+
+    size_t prefix_count = prefixes.size();
+    size_t suffix_count = suffixes.size();
+    hashes.resize(prefix_count * suffix_count);
+
+    for (size_t i = 0; i < prefix_count; ++i)
     {
         std::string_view prefix = prefixes[i];
 
         HashReverse(
-            hashes.data(), &hashes[i * suffix_count], suffix_count, (const uint8_t*) prefix.data(), prefix.size());
+            suffixes.data(), &hashes[i * suffix_count], suffix_count, (const uint8_t*) prefix.data(), prefix.size());
     }
-
-    --SuffixPos;
-    CurrentParts[SuffixPos] = prefixes;
 }
 
-void Collider::_GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t prefix_count) const
+template <typename Func>
+void Collider::GetPrefix(Func& func, IndexType index, size_t i, IndexType prefix_count) const
 {
     if (i == 0)
     {
@@ -187,28 +197,21 @@ void Collider::_GetPrefix(StringBuffer& buffer, size_t index, size_t i, size_t p
     --i;
 
     const auto suffixes = CurrentParts[i];
-    prefix_count /= suffixes.size();
+    prefix_count /= (IndexType) suffixes.size();
 
     std::string_view suffix = suffixes[index / prefix_count];
     index %= prefix_count;
 
-    _GetPrefix(buffer, index, i, prefix_count);
-
-    buffer.append(suffix.data(), suffix.size());
+    GetPrefix(func, index, i, prefix_count);
+    func(suffix);
 }
 
-void Collider::GetPrefix(StringBuffer& buffer, size_t index) const
-{
-    size_t prefix_count = Prefixes[PrefixPos].size();
-
-    _GetPrefix(buffer, index, PrefixPos, prefix_count);
-}
-
-size_t Collider::GetSuffix(StringBuffer& buffer, size_t index) const
+template <typename Func>
+size_t Collider::GetSuffix(Func& func, IndexType index) const
 {
     size_t suffix_count = SuffixBucketEntries.size();
 
-    for (size_t i = SuffixPos; i != Parts.size(); ++i)
+    for (size_t i = SuffixPos; i != StringParts.size(); ++i)
     {
         const auto prefixes = CurrentParts[i];
         suffix_count /= prefixes.size();
@@ -216,10 +219,17 @@ size_t Collider::GetSuffix(StringBuffer& buffer, size_t index) const
         std::string_view prefix = prefixes[index / suffix_count];
         index %= suffix_count;
 
-        buffer.append(prefix.data(), prefix.size());
+        func(prefix);
     }
 
     return index;
+}
+
+template <typename Func>
+size_t Collider::GetString(size_t prefix, size_t suffix, Func&& func)
+{
+    GetPrefix(func, (IndexType) prefix, PrefixPos, (IndexType) Prefixes[PrefixPos].size());
+    return GetSuffix(func, (IndexType) suffix);
 }
 
 // This sorts two unsigned integer arrays, based on the values of the first array.
@@ -235,8 +245,7 @@ size_t Collider::GetSuffix(StringBuffer& buffer, size_t index) const
 // The radix sort could be replaced with a different partitioning scheme,
 // but this seems unnecessary given that the hashes are expected to be randomly distributed.
 template <typename Index>
-static void SortHashesWithIndices(
-    ThreadPool& pool, uint32_t* hashes, Index* indices, size_t count, uint32_t bit = std::numeric_limits<Index>::digits)
+static void SortHashesWithIndices(uint32_t* hashes, Index* indices, size_t count, uint32_t bit = 32)
 {
     if ((bit == 0) || (count < 16))
     {
@@ -289,28 +298,33 @@ static void SortHashesWithIndices(
         }
     }
 
-    const auto sort_lower = [=, &pool] { SortHashesWithIndices(pool, hashes, indices, pivot, bit); };
-    const auto sort_upper = [=, &pool] {
-        SortHashesWithIndices(pool, hashes + pivot, indices + pivot, count - pivot, bit);
-    };
-
-    if (pivot > 0x10000)
-    {
-        pool.run(sort_lower);
-    }
-    else
-    {
-        sort_lower();
-    }
-
-    sort_upper();
+    SortHashesWithIndices(hashes, indices, pivot, bit);
+    SortHashesWithIndices(hashes + pivot, indices + pivot, count - pivot, bit);
 }
-
-using Stopwatch = std::chrono::high_resolution_clock;
 
 static double DeltaSeconds(Stopwatch::time_point t1, Stopwatch::time_point t2)
 {
     return std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count();
+}
+
+Collider::Collider(size_t num_threads, size_t batch_size, size_t lookup_size)
+    : Pool(true, num_threads)
+    , BatchSize(batch_size)
+    , LookupSize(lookup_size)
+{
+    constexpr size_t limit = (std::numeric_limits<IndexType>::max)();
+
+    if (BatchSize > limit)
+    {
+        BatchSize = limit;
+        printf("Clamped batch size to 0x%zX\n", BatchSize);
+    }
+
+    if (LookupSize > limit)
+    {
+        LookupSize = limit;
+        printf("Clamped lookup size to 0x%zX\n", LookupSize);
+    }
 }
 
 void Collider::AddHash(uint32_t adler, SHA256_Hash sha)
@@ -321,20 +335,19 @@ void Collider::AddHash(uint32_t adler, SHA256_Hash sha)
 
 void Collider::NextPart()
 {
-    Parts.emplace_back();
+    StringParts.emplace_back();
 }
 
 void Collider::AddString(const char* data)
 {
-    Parts.back().emplace_back(*InputStrings.emplace(data).first);
+    StringParts.back().emplace_back(*StringPool.emplace(data).first);
 }
 
-void Collider::Compile(size_t batch_size, size_t lookup_size)
+void Collider::Preprocess()
 {
-    BatchSize = batch_size;
-    LookupSize = lookup_size;
+    auto start = Stopwatch::now();
 
-    for (const auto& part : Parts)
+    for (const auto& part : StringParts)
     {
         AdlerParts.emplace_back();
 
@@ -343,23 +356,24 @@ void Collider::Compile(size_t batch_size, size_t lookup_size)
     }
 
     uint32_t seed = 1;
-    Prefixes.resize(Parts.size() + 1);
+    Prefixes.resize(StringParts.size() + 1);
     Prefixes[0] = {seed};
 
-    std::vector<uint32_t> suffixes = AdlerHashes;
+    Suffixes.resize(StringParts.size() + 1);
+    Suffixes[StringParts.size()] = AdlerHashes;
 
     PrefixPos = 0;
-    SuffixPos = Parts.size();
+    SuffixPos = StringParts.size();
 
-    CurrentParts.resize(Parts.size());
+    CurrentParts.resize(StringParts.size());
 
     while (PrefixPos != SuffixPos)
     {
-        std::span<const std::string_view> next_prefix = Parts[PrefixPos];
-        std::span<const std::string_view> next_suffix = Parts[SuffixPos - 1];
+        std::span<const std::string_view> next_prefix = StringParts[PrefixPos];
+        std::span<const std::string_view> next_suffix = StringParts[SuffixPos - 1];
 
         size_t next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
-        size_t next_suffix_size = suffixes.size() * next_suffix.size();
+        size_t next_suffix_size = Suffixes[SuffixPos].size() * next_suffix.size();
 
         bool more_prefixes = next_prefix_size < BatchSize;
         bool more_suffixes = next_suffix_size < LookupSize;
@@ -378,7 +392,7 @@ void Collider::Compile(size_t batch_size, size_t lookup_size)
         else if (more_suffixes)
         {
             // printf("Expanding Suffixes %zu\n", SuffixPos - 1);
-            PushSuffix(suffixes, next_suffix);
+            PushSuffix(next_suffix);
         }
         else
         {
@@ -386,55 +400,103 @@ void Collider::Compile(size_t batch_size, size_t lookup_size)
         }
     }
 
-    size_t prefix_count = Prefixes[PrefixPos].size();
-    size_t suffix_count = suffixes.size();
+    printf("Preprocessed: %zu/%zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, StringParts.size(),
+        Prefixes[PrefixPos].size(), Suffixes[SuffixPos].size(), DeltaSeconds(start, Stopwatch::now()));
 
-    SuffixIndices.resize(suffix_count);
+    TotalCombinations[0] = AdlerHashes.size();
+    TotalCombinations[1] = 0;
 
-    for (size_t i = 0; i < suffix_count; ++i)
-        SuffixIndices[i] = static_cast<SuffixIndex>(i);
+    for (size_t i = 0; i < StringParts.size(); ++i)
+    {
+        uint64_t n = StringParts[i].size();
+        TotalCombinations[0] *= n;
+        TotalCombinations[1] *= n;
+        TotalCombinations[1] += TotalCombinations[0] / TeraHash;
+        TotalCombinations[0] = TotalCombinations[0] % TeraHash;
+    }
+}
 
-    auto start = Stopwatch::now();
-
-    // printf("Building suffix lookup...\n");
-    SortHashesWithIndices(*Pool, suffixes.data(), SuffixIndices.data(), suffix_count);
-    Pool->wait();
-
-    // printf("Building suffix filter...\n");
-
-    // Create using sorted hashes to improve cache hits
-    constexpr size_t FilterRadix = sizeof(FilterWord) * CHAR_BIT;
-    SuffixFilter.resize(1 + (UINT32_MAX / FilterRadix));
-
-    for (size_t i = 0; i < suffix_count; ++i)
-        bit_set(SuffixFilter.data(), suffixes[i]);
-
-    // printf("Building suffix buckets...\n");
+void Collider::CompileSuffixes()
+{
+    std::span<const uint32_t> suffixes = Suffixes[SuffixPos];
 
     constexpr size_t NumBuckets = 0x1000000;
     SuffixBuckets.resize(NumBuckets + 1);
+    SuffixBuckets[NumBuckets] = (IndexType) suffixes.size();
+    SuffixIndices.resize(suffixes.size());
     SuffixBucketEntries.resize(suffixes.size());
 
-    size_t here = 0;
+    constexpr size_t FilterRadix = sizeof(FilterWord) * CHAR_BIT;
+    SuffixFilter.clear();
+    SuffixFilter.resize(1 + (UINT32_MAX / FilterRadix));
 
-    for (size_t i = 0; i < NumBuckets; ++i)
-    {
-        for (; here < suffixes.size(); ++here)
+    std::atomic<IndexType> counts[256 + 1] {};
+    counts[256] = (IndexType) suffixes.size();
+
+    Pool.partition(suffixes.size(), 0x100000, [&](size_t start, size_t count) {
+        IndexType sub_counts[256] {};
+
+        for (size_t i = start, end = start + count; i < end; ++i)
+            ++sub_counts[suffixes[i] >> 24];
+
+        for (size_t i = 0; i < 256; ++i)
         {
-            uint32_t hash = suffixes[here];
+            if (IndexType n = sub_counts[i])
+                counts[i] += n;
+        }
+    });
 
-            if ((hash >> 8) > i)
-                break;
+    IndexType total = 0;
 
-            SuffixBucketEntries[here] = hash & 0xFF;
+    for (size_t i = 0; i < 256; ++i)
+        total += counts[i].fetch_add(total);
+
+    Pool.partition(suffixes.size(), 0x100000, [&](size_t start, size_t count) {
+        IndexType starts[256] {};
+
+        for (size_t i = start, end = start + count; i < end; ++i)
+            ++starts[suffixes[i] >> 24];
+
+        for (size_t i = 0; i < 256; ++i)
+        {
+            if (IndexType n = starts[i])
+                starts[i] = counts[i].fetch_sub(n);
         }
 
-        SuffixBuckets[i + 1] = static_cast<SuffixIndex>(here);
-    }
+        for (size_t i = start, end = start + count; i < end; ++i)
+            SuffixIndices[--starts[suffixes[i] >> 24]] = (IndexType) i;
+    });
 
-    auto delta = DeltaSeconds(start, Stopwatch::now());
-    printf("Compiled: %zu/%zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, Parts.size(), prefix_count,
-        suffix_count, delta);
+    Pool.for_n(256, [&](size_t n) {
+        IndexType start = counts[n];
+        IndexType end = counts[n + 1];
+
+        size_t count = end - start;
+        std::vector<uint32_t> sub_hashes(count);
+
+        for (size_t i = 0; i < count; ++i)
+            sub_hashes[i] = suffixes[SuffixIndices[start + i]];
+
+        SortHashesWithIndices(sub_hashes.data(), &SuffixIndices[start], sub_hashes.size(), 24);
+
+        IndexType here = 0;
+
+        for (size_t i = 0; i < 65536; ++i)
+        {
+            size_t j = (n << 16) | i;
+            SuffixBuckets[j] = start + here;
+
+            for (; here < count; ++here)
+            {
+                uint32_t hash = sub_hashes[here];
+                bit_set(SuffixFilter.data(), hash);
+                SuffixBucketEntries[start + here] = hash & 0xFF;
+
+                if ((hash >> 8) > j)
+                    break;
+            }
+        }
+    });
 }
 
 static std::atomic_bool g_Running = true;
@@ -444,7 +506,7 @@ void Collider::Match()
     if (!g_Running)
         return;
 
-    Pool->partition(
+    Pool.partition(
         Prefixes[PrefixPos].size(), 0x10000, [this](size_t start, size_t count) { return Match(start, count); });
 }
 
@@ -497,15 +559,17 @@ void Collider::AddMatch(size_t index, uint32_t hash)
 
     for (; (find != end) && (*find == sub_hash); ++find)
     {
-        StringBuffer match;
-        GetPrefix(match, index);
-        size_t target = GetSuffix(match, SuffixIndices[find - subs]);
+        SHA256_CTX hasher;
+        IndexType suffix = SuffixIndices[find - subs];
 
-        std::string_view value = match.str();
-        SHA256_Hash sha = SHA256_Hash::Hash(value.data(), value.size());
+        size_t target = GetString(
+            index, suffix, [&hasher](std::string_view str) { hasher.Update((const uint8_t*) str.data(), str.size()); });
 
-        if (sha == ShaHashes[target])
+        if (hasher.Digest() == ShaHashes[target])
         {
+            std::string value;
+            GetString(index, suffix, [&value](std::string_view str) { value += str; });
+
             std::lock_guard guard(MatchLock);
 
             if (auto [iter, added] = FoundStrings.emplace(value); added)
@@ -516,10 +580,50 @@ void Collider::AddMatch(size_t index, uint32_t hash)
     }
 }
 
-void Collider::Collide(bool outer)
+void Collider::Run()
+{
+    Preprocess();
+
+    printf("Searching... (press Ctrl+C to stop)\n");
+    StartTime = Stopwatch::now();
+    NextUpdate = 5.0f;
+
+    // Expanding the suffix filter in this way won't reduce the search space.
+    // So generally this won't provide a speed-up, unless the suffix filter is very small.
+    if ((SuffixPos - PrefixPos) >= 2)
+    {
+        size_t step = LookupSize / Suffixes[SuffixPos].size();
+        std::span<const std::string_view> parts = StringParts[SuffixPos - 1];
+
+        if (step > 1024)
+        {
+            for (size_t i = 0; i < parts.size();)
+            {
+                if (!g_Running)
+                    return;
+
+                size_t n = (std::min)(step, parts.size() - i);
+                PushSuffix({&parts[i], n});
+                CompileSuffixes();
+                CollideForwards();
+                PopSuffix();
+                i += n;
+            }
+
+            return;
+        }
+    }
+
+    CompileSuffixes();
+    CollideForwards();
+}
+
+void Collider::CollideForwards()
 {
     if (!g_Running)
         return;
+
+    ReportProgress();
 
     // printf("Collide %zu/%zu\n", PrefixPos, SuffixPos);
 
@@ -530,19 +634,14 @@ void Collider::Collide(bool outer)
         uint64_t checks =
             static_cast<uint64_t>(Prefixes[PrefixPos].size()) * static_cast<uint64_t>(SuffixBucketEntries.size());
 
-        const uint64_t TeraHash = UINT64_C(1000000000000);
-        uint64_t accumulator = HashSubTotal + checks;
-        TeraHashTotal += accumulator / TeraHash;
-        HashSubTotal = accumulator % TeraHash;
+        uint64_t accumulator = DoneCombinations[0] + checks;
+        DoneCombinations[1] += accumulator / TeraHash;
+        DoneCombinations[0] = accumulator % TeraHash;
     }
     else
     {
-        std::span<const std::string_view> parts = Parts[PrefixPos];
+        std::span<const std::string_view> parts = StringParts[PrefixPos];
         std::span<const Adler32::HashPart> adler_parts = AdlerParts[PrefixPos];
-
-        auto start = Stopwatch::now();
-        auto total = TeraHashTotal;
-        auto next_update = 10.0;
 
         size_t step = BatchSize / Prefixes[PrefixPos].size();
 
@@ -551,37 +650,42 @@ void Collider::Collide(bool outer)
             if (!g_Running)
                 return;
 
-            if (outer)
-            {
-                if (auto delta = DeltaSeconds(start, Stopwatch::now()); delta >= next_update)
-                {
-                    auto done = static_cast<double>(i) / static_cast<double>(parts.size());
-                    auto remaining = (delta / done) - delta;
-                    printf("# %5.2f%%, %4.1f mins remaining @ %.2f tH/s\n", done * 100.0f, remaining / 60.0f,
-                        static_cast<double>(TeraHashTotal - total) / delta);
-                    next_update += (std::min)(10.0f + next_update * 0.1, (std::clamp)(remaining * 0.5f, 30.0, 300.0));
-                }
-            }
-
             size_t n = (std::min)(step, parts.size() - i);
             PushPrefix({&parts[i], n}, {&adler_parts[i], n});
-            Collide(false);
+            CollideForwards();
             PopPrefix();
             i += n;
         }
     }
 }
 
-void Collider::HashForward(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix) const
+void Collider::ReportProgress()
 {
-    Pool->partition(count, 0x10000,
+    if (auto delta = DeltaSeconds(StartTime, Stopwatch::now()); delta >= NextUpdate)
+    {
+        auto done = static_cast<double>(DoneCombinations[1]) / static_cast<double>(TotalCombinations[1]);
+
+        if (done > 0.0001)
+        {
+            auto remaining = (delta / done) - delta;
+            printf("# %5.2f%%, %4.1f mins remaining @ %.2f tH/s\n", done * 100.0f, remaining / 60.0f,
+                static_cast<double>(DoneCombinations[1]) / delta);
+            NextUpdate = (std::max)(NextUpdate, delta) +
+                (std::min)(10.0 + NextUpdate * 0.1, (std::clamp)(remaining * 0.5, 30.0, 300.0));
+        }
+    }
+}
+
+void Collider::HashForward(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix)
+{
+    Pool.partition(count, 0x10000,
         [=](size_t start, size_t count) { Adler32::HashForward(input + start, output + start, count, suffix); });
 }
 
 void Collider::HashReverse(
-    const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length) const
+    const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length)
 {
-    Pool->partition(count, 0x10000, [=](size_t start, size_t count) {
+    Pool.partition(count, 0x10000, [=](size_t start, size_t count) {
         Adler32::HashReverse(input + start, output + start, count, suffix, suffix_length);
     });
 }
@@ -603,9 +707,9 @@ static BOOL WINAPI CtrlHandler(DWORD fdwCtrlType)
 }
 #endif
 
-Collider* Collider_Create()
+Collider* Collider_Create(size_t num_threads, size_t batch_size, size_t lookup_size)
 {
-    return new Collider();
+    return new Collider(num_threads, batch_size, lookup_size);
 }
 
 void Collider_Destroy(Collider* collider)
@@ -630,25 +734,20 @@ void Collider_AddString(Collider* collider, const char* string)
     collider->AddString(string);
 }
 
-size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_size, size_t suffix_table_size)
+size_t Collider_Run(Collider* collider)
 {
     g_Running = true;
+
 #ifdef _WIN32
+    // Prevent idle timer sleep
+    EXECUTION_STATE prev_exec_state = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+
+    // Handle Ctrl+C
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
 #endif
 
     auto start = Stopwatch::now();
-
-    ThreadPool pool {true, num_threads};
-
-    collider->Pool = &pool;
-    // printf("Compiling...\n");
-    collider->Compile(prefix_table_size, suffix_table_size);
-
-    printf("Searching... (press Ctrl+C to stop)\n");
-    collider->Collide();
-    collider->Pool = nullptr;
-
+    collider->Run();
     auto delta = DeltaSeconds(start, Stopwatch::now());
 
     size_t total = collider->FoundStrings.size();
@@ -658,6 +757,7 @@ size_t Collider_Run(Collider* collider, size_t num_threads, size_t prefix_table_
         static_cast<double>(collider->GetTotalTeraHashes()) / static_cast<double>(delta));
 
 #ifdef _WIN32
+    SetThreadExecutionState(prev_exec_state);
     SetConsoleCtrlHandler(CtrlHandler, FALSE);
 #endif
 

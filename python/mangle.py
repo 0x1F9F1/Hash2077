@@ -7,9 +7,7 @@ def number(x):
 	if x < 0:
 		result.append('?')
 		x = -x
-	if x == 0:
-		result.append('A@')
-	elif x <= 10:
+	if 1 <= x <= 10:
 		result.append('0123456789'[x - 1])
 	else:
 		result.extend(HEXMAP[v] for v in f'{x:X}')

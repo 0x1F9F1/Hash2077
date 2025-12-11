@@ -18,6 +18,6 @@ The compiled DLL can be found in `build\bin\Release\hash2077.dll`.
 
 ## Usage
 Your CPU must support the AVX2 and SHA instruction set extensions. \
-For optimal performance it is recommended to have at least 32GB of RAM. If you have less, you may need to reduce `prefix_size` and `suffix_size` to avoid running out of memory. \
+For optimal performance it is recommended to have at least 16GB of RAM. If you have less, you may need to reduce `suffix_size` to avoid running out of memory. \
 Copy `cyberpunk2077_addresses.json` to the `python` folder. \
 For example usage, see `collide.py`.
