@@ -13,9 +13,6 @@ namespace Adler32
     };
 
     HashPart Preprocess(const uint8_t* data, size_t length);
-
     void HashForward(const uint32_t* input, uint32_t* output, size_t count, HashPart suffix);
-
-    void HashReverse(
-        const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length);
+    void HashReverse(const uint32_t* input, uint32_t* output, size_t count, HashPart suffix);
 }; // namespace Adler32

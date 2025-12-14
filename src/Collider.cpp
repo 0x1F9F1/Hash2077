@@ -56,9 +56,9 @@ private:
 
     void PushPrefix(std::span<const std::string_view> suffixes, std::span<const Adler32::HashPart> adlers);
     void PopPrefix();
-    void PopSuffix();
 
-    void PushSuffix(std::span<const std::string_view> prefixes);
+    void PushSuffix(std::span<const std::string_view> prefixes, std::span<const Adler32::HashPart> adlers);
+    void PopSuffix();
 
     template <typename Func>
     void GetPrefix(Func& func, IndexType index, size_t i, IndexType prefix_count) const;
@@ -74,8 +74,7 @@ private:
     void AddMatch(size_t index, uint32_t hash);
 
     void HashForward(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix);
-    void HashReverse(
-        const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length);
+    void HashReverse(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix);
 
     ThreadPool Pool;
     size_t BatchSize {};
@@ -165,7 +164,7 @@ void Collider::PopSuffix()
     ++SuffixPos;
 }
 
-void Collider::PushSuffix(std::span<const std::string_view> prefixes)
+void Collider::PushSuffix(std::span<const std::string_view> prefixes, std::span<const Adler32::HashPart> adlers)
 {
     std::span<const uint32_t> suffixes = Suffixes[SuffixPos];
 
@@ -179,10 +178,7 @@ void Collider::PushSuffix(std::span<const std::string_view> prefixes)
 
     for (size_t i = 0; i < prefix_count; ++i)
     {
-        std::string_view prefix = prefixes[i];
-
-        HashReverse(
-            suffixes.data(), &hashes[i * suffix_count], suffix_count, (const uint8_t*) prefix.data(), prefix.size());
+        HashReverse(suffixes.data(), &hashes[i * suffix_count], suffix_count, adlers[i]);
     }
 }
 
@@ -392,7 +388,7 @@ void Collider::Preprocess()
         else if (more_suffixes)
         {
             // printf("Expanding Suffixes %zu\n", SuffixPos - 1);
-            PushSuffix(next_suffix);
+            PushSuffix(next_suffix, AdlerParts[SuffixPos - 1]);
         }
         else
         {
@@ -594,6 +590,7 @@ void Collider::Run()
     {
         size_t step = LookupSize / Suffixes[SuffixPos].size();
         std::span<const std::string_view> parts = StringParts[SuffixPos - 1];
+        std::span<const Adler32::HashPart> adler_parts = AdlerParts[SuffixPos - 1];
 
         if (step > 1024)
         {
@@ -603,7 +600,7 @@ void Collider::Run()
                     return;
 
                 size_t n = (std::min)(step, parts.size() - i);
-                PushSuffix({&parts[i], n});
+                PushSuffix({&parts[i], n}, {&adler_parts[i], n});
                 CompileSuffixes();
                 CollideForwards();
                 PopSuffix();
@@ -682,12 +679,10 @@ void Collider::HashForward(const uint32_t* input, uint32_t* output, size_t count
         [=](size_t start, size_t count) { Adler32::HashForward(input + start, output + start, count, suffix); });
 }
 
-void Collider::HashReverse(
-    const uint32_t* input, uint32_t* output, size_t count, const uint8_t* suffix, size_t suffix_length)
+void Collider::HashReverse(const uint32_t* input, uint32_t* output, size_t count, Adler32::HashPart suffix)
 {
-    Pool.partition(count, 0x10000, [=](size_t start, size_t count) {
-        Adler32::HashReverse(input + start, output + start, count, suffix, suffix_length);
-    });
+    Pool.partition(count, 0x10000,
+        [=](size_t start, size_t count) { Adler32::HashReverse(input + start, output + start, count, suffix); });
 }
 
 #ifdef _WIN32

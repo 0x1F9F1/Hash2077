@@ -45,15 +45,12 @@ def strlits():
 	collide(segs(SEG_RDATA), strings)
 
 def vftables():
-	names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@")
+	names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@')
 	collide(segs(SEG_RDATA), '??_7', ['', 'C', 'I', 'S'], *rep(names, 3), loadlines('data/ns.txt'), '@@6B@')
 
 def ctor_dtors():
 	class_names = [ v[4:-5] for v in hasher.known.values() if v.startswith('??_7') ]
 	collide(segs(SEG_CODE), ['??0', '??1'], class_names, '@@', list('AIQEMU'), 'EAA@XZ')
 	collide(segs(SEG_CODE), '??_G', class_names, '@@', list('EMU'), 'EAAPEAXI@Z')
-
-# names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@")
-# collide(segs(SEG_CODE), ['??0'], ['', 'C', 'I', 'S'], *rep(names, 3), loadlines('data/ns.txt'), '@@', list('AIQ'), 'EAA@XZ')
 
 hasher.save()
