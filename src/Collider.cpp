@@ -61,10 +61,10 @@ private:
     void PopSuffix();
 
     template <typename Func>
-    void GetPrefix(Func& func, IndexType index, size_t i, IndexType prefix_count) const;
+    void GetPrefix(IndexType index, Func& func) const;
 
     template <typename Func>
-    size_t GetSuffix(Func& func, IndexType index) const;
+    size_t GetSuffix(IndexType index, Func& func) const;
 
     template <typename Func>
     size_t GetString(size_t prefix, size_t suffix, Func&& func);
@@ -183,34 +183,30 @@ void Collider::PushSuffix(std::span<const std::string_view> prefixes, std::span<
 }
 
 template <typename Func>
-void Collider::GetPrefix(Func& func, IndexType index, size_t i, IndexType prefix_count) const
+void Collider::GetPrefix(IndexType index, Func& func) const
 {
-    if (i == 0)
+    for (size_t i = 0; i < PrefixPos; ++i)
     {
-        return;
+        const auto prefixes = CurrentParts[i];
+        const auto n = (IndexType) prefixes.size();
+
+        std::string_view prefix = prefixes[index % n];
+        index /= n;
+
+        func(prefix);
     }
-
-    --i;
-
-    const auto suffixes = CurrentParts[i];
-    prefix_count /= (IndexType) suffixes.size();
-
-    std::string_view suffix = suffixes[index / prefix_count];
-    index %= prefix_count;
-
-    GetPrefix(func, index, i, prefix_count);
-    func(suffix);
 }
 
 template <typename Func>
-size_t Collider::GetSuffix(Func& func, IndexType index) const
+size_t Collider::GetSuffix(IndexType index, Func& func) const
 {
-    size_t suffix_count = SuffixBucketEntries.size();
+    IndexType suffix_count = (IndexType) SuffixBucketEntries.size();
 
     for (size_t i = SuffixPos; i != StringParts.size(); ++i)
     {
         const auto prefixes = CurrentParts[i];
-        suffix_count /= prefixes.size();
+        const auto n = (IndexType) prefixes.size();
+        suffix_count /= n;
 
         std::string_view prefix = prefixes[index / suffix_count];
         index %= suffix_count;
@@ -224,8 +220,8 @@ size_t Collider::GetSuffix(Func& func, IndexType index) const
 template <typename Func>
 size_t Collider::GetString(size_t prefix, size_t suffix, Func&& func)
 {
-    GetPrefix(func, (IndexType) prefix, PrefixPos, (IndexType) Prefixes[PrefixPos].size());
-    return GetSuffix(func, (IndexType) suffix);
+    GetPrefix((IndexType) prefix, func);
+    return GetSuffix((IndexType) suffix, func);
 }
 
 // This sorts two unsigned integer arrays, based on the values of the first array.
@@ -592,14 +588,14 @@ void Collider::Run()
         std::span<const std::string_view> parts = StringParts[SuffixPos - 1];
         std::span<const Adler32::HashPart> adler_parts = AdlerParts[SuffixPos - 1];
 
-        if (step > 1024)
+        if (step > 128)
         {
             for (size_t i = 0; i < parts.size();)
             {
                 if (!g_Running)
                     return;
 
-                size_t n = (std::min)(step, parts.size() - i);
+                size_t n = (std::min) (step, parts.size() - i);
                 PushSuffix({&parts[i], n}, {&adler_parts[i], n});
                 CompileSuffixes();
                 CollideForwards();
@@ -647,7 +643,7 @@ void Collider::CollideForwards()
             if (!g_Running)
                 return;
 
-            size_t n = (std::min)(step, parts.size() - i);
+            size_t n = (std::min) (step, parts.size() - i);
             PushPrefix({&parts[i], n}, {&adler_parts[i], n});
             CollideForwards();
             PopPrefix();
@@ -667,8 +663,8 @@ void Collider::ReportProgress()
             auto remaining = (delta / done) - delta;
             printf("# %5.2f%%, %4.1f mins remaining @ %.2f tH/s\n", done * 100.0f, remaining / 60.0f,
                 static_cast<double>(DoneCombinations[1]) / delta);
-            NextUpdate = (std::max)(NextUpdate, delta) +
-                (std::min)(10.0 + NextUpdate * 0.1, (std::clamp)(remaining * 0.5, 30.0, 300.0));
+            NextUpdate = (std::max) (NextUpdate, delta) +
+                (std::min) (10.0 + NextUpdate * 0.1, (std::clamp) (remaining * 0.5, 30.0, 300.0));
         }
     }
 }

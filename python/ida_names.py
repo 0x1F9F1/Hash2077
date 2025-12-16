@@ -8,8 +8,21 @@ segs = { k:ida_segment.get_segm_by_name(v).start_ea for k,v in [
 	("0003", ".data")
 ]}
 
+vftables = set()
+
 for seg, off, adler, sha in addrs:
-	if (seg in segs) and (sha in known):
+	if seg in segs:
 		addr = segs[seg] + off
-		idaapi.set_name(addr, known[sha], idaapi.SN_FORCE | ida_name.SN_PUBLIC)
-		# idc.set_cmt(addr, f'Adler32: {adler}, SHA256: {sha.hex().upper()}', 0)
+		idc.set_cmt(addr, f'Adler32: {adler}, SHA256: {sha.hex().upper()}', 0)
+
+		if seg == '0002':
+			dref = ida_xref.get_first_dref_from(addr)
+
+			if ida_bytes.is_func(ida_bytes.get_flags(dref)):
+				vftables.add(sha)
+
+		if sha in known:
+			idaapi.set_name(addr, known[sha], idaapi.SN_FORCE | ida_name.SN_PUBLIC)
+
+with open('vftables.txt', 'w') as f:
+	f.write('\n'.join(sorted(v.hex().upper() for v in vftables)))

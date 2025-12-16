@@ -39,7 +39,7 @@ struct SHA256_CTX
 
     void Update(const uint8_t* input, size_t len)
     {
-        while (len > 0)
+        while (len) [[likely]]
         {
             size_t n = 64 - datalen;
 
@@ -47,17 +47,17 @@ struct SHA256_CTX
                 n = len;
 
             std::memcpy(&data[datalen], input, n);
-
             datalen += n;
+
+            if (datalen != 64) [[likely]]
+                break;
+
             input += n;
             len -= n;
 
-            if (datalen == 64)
-            {
-                Transform();
-                bitlen += 512;
-                datalen = 0;
-            }
+            Transform();
+            bitlen += 512;
+            datalen = 0;
         }
     }
 
