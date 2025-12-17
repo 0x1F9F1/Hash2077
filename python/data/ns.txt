@@ -3,13 +3,16 @@
 @actions@player@stateMachine@game
 @actions@vehicle
 @ActionsScenarios@sim@scn
+@activity
 @AI
 @aim@game
 @aimAssist@game
 @aiscript
 @AK
+@analog
 @anim
 @anim@ink
+@animation
 @app
 @appearance
 @arcade@ui@game
@@ -22,8 +25,12 @@
 @bb@game
 @behavior@AI
 @breathing@audio
+@buff
+@builds
+@camera
 @camera@game
 @carry@game
+@character
 @cheatsystem@game
 @cloth@physics
 @CMesh
@@ -33,7 +40,9 @@
 @Config
 @Conveyor@cp
 @cp
+@cursor
 @curve
+@custom
 @damage@game
 @data
 @data@game
@@ -45,8 +54,10 @@
 @dev@scn
 @device
 @device@game
+@dialog
 @dim@rend
 @dismemberment@ent
+@drill
 @effect
 @ent
 @env
@@ -63,6 +74,7 @@
 @fpp@scn
 @fs
 @fss@anim
+@fullscreen
 @FunctionalTests
 @FunctionalTestsData
 @fx
@@ -87,6 +99,7 @@
 @helper@game
 @hit@game
 @hitRepresentationEvents@game
+@hud
 @impl@rtti
 @influence@AI
 @influence@game
@@ -117,6 +130,7 @@
 @MovingPlatform@game
 @mp
 @Multilayer_LayerTemplate
+@multiplayer
 @nav
 @NavGen
 @navgendebug
@@ -189,6 +203,7 @@
 @vis
 @vis@interactions@game
 @watchdog@game
+@weapon
 @weapon@game
 @work
 @workspot@work
