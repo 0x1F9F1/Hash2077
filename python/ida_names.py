@@ -15,14 +15,14 @@ for seg, off, adler, sha in addrs:
 		addr = segs[seg] + off
 		idc.set_cmt(addr, f'Adler32: {adler}, SHA256: {sha.hex().upper()}', 0)
 
-		if seg == '0002':
-			dref = ida_xref.get_first_dref_from(addr)
-
-			if ida_bytes.is_func(ida_bytes.get_flags(dref)):
-				vftables.add(sha)
+		# if seg == '0002':
+		# 	dref = ida_xref.get_first_dref_from(addr)
+		# 	if ida_bytes.is_func(ida_bytes.get_flags(dref)):
+		# 		vftables.add(sha)
 
 		if sha in known:
 			idaapi.set_name(addr, known[sha], idaapi.SN_FORCE | ida_name.SN_PUBLIC)
 
-with open('vftables.txt', 'w') as f:
-	f.write('\n'.join(sorted(v.hex().upper() for v in vftables)))
+if vftables:
+	with open('vftables.txt', 'w') as f:
+		f.write('\n'.join(sorted(v.hex().upper() for v in vftables)))

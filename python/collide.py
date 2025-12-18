@@ -37,6 +37,9 @@ def dynamic_ctor_dtors():
 	inits = [ v[1:-11].replace('$initializer$', '') for v in hasher.known.values() if v.endswith('@@3P6AXXZEA') ]
 	collide(segs(SEG_CODE), ['??__E', '??__F'], set(hasher.known.values()) | set(inits), '@@YAXXZ')
 
+	inits = [ '?' + v[5:-5].replace('@', '$initializer$@', count=1) + '3P6AXXZEA' for v in hasher.known.values() if v.startswith('??__E') ]
+	collide(segs(SEG_RDATA), inits)
+
 def unwinds():
 	collide(segs(SEG_RDATA), [ '$unwind$' ] + [ f'$chain${i}$' for i in range(32) ], hasher.known.values())
 
@@ -70,6 +73,13 @@ def vftable_hashes():
 def vftables():
 	names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@')
 	collide(vftable_hashes(), '??_7', ['', 'C', 'I', 'S'], *rep(names, 3), loadlines('data/ns.txt'), '@@6B@')
+
+def get_class_names():
+	class_names = { v[4:-5] for v in hasher.known.values() if v.startswith('??_7') }
+	class_names |= { v[22:-10] for v in hasher.known.values() if v.startswith('??$GetNativeTypeHash@') }
+	class_names |= { v[16:-7] for v in class_names if v.startswith('?$TNativeClass@') }
+	class_names |= { v[21:-7] for v in class_names if v.startswith('?$TNativeClassNoCopy@') }
+	return class_names
 
 def class_funcs(class_names):
 	extra_names = set()
@@ -116,11 +126,7 @@ def class_funcs(class_names):
 	collide(segs(SEG_DATA), '?$TSS0@?1???$GetTypeObject@', list('UV'), class_names, '@@@@YAPEBVIType@rtti@@XZ@4HA')
 
 def class_funcs_1():
-	class_names = { v[4:-5] for v in hasher.known.values() if v.startswith('??_7') }
-	class_names |= { v[22:-10] for v in hasher.known.values() if v.startswith('??$GetNativeTypeHash@') }
-	class_names |= { v[16:-7] for v in class_names if v.startswith('?$TNativeClass@') }
-	class_names |= { v[21:-7] for v in class_names if v.startswith('?$TNativeClassNoCopy@') }
-	class_funcs(class_names)
+	class_funcs(get_class_names())
 
 def class_funcs_2():
 	import json
@@ -146,7 +152,24 @@ def class_funcs_2():
 		class_names.add(name + ns)
 	class_funcs(class_names)
 
-class_funcs_1()
-unwinds()
+def static_locals():
+	collide(segs(SEG_DATA), '?$TSS', [str(x) for x in range(16)], '@?', [mangle.number(x) for x in range(1000)], '?', hasher.known.values(), '@4HA')
+
+def member_funcs():
+	names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@')
+	mfunc_types = {'CAXXZ', 'KAXXZ', 'SAXXZ'} # static void()
+	return_types = [
+		'X', # void
+		'_N', # bool
+		'_J', # i64
+		'_K', # u64
+		'H', # i32
+		'I', # u32
+	]
+	for access in 'AIQEMU':
+		for cv in 'AB':
+			for ty in return_types:
+				mfunc_types.add(f'{access}E{cv}A{ty}XZ')
+	collide(segs(SEG_CODE), '?', *rep(names, 2), '@', get_class_names(), '@@', mfunc_types)
 
 hasher.save()
