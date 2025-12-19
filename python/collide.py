@@ -17,13 +17,12 @@ def adlers(*adler_ids):
 	return [ (adler, sha) for seg, off, adler, sha in addrs if adler in adler_ids ]
 
 def collide(hashes, *parts, num_threads=0, batch_size=2**26, lookup_size=2**30):
-	hashes = list(set(hashes))
 	part_lists = []
 	for part in parts:
 		if isinstance(part, str):
 			part_lists.append([part])
 		else:
-			part_lists.append(list(sorted(set(part))))
+			part_lists.append(part)
 	return hasher.collide(hashes, part_lists, num_threads, batch_size, lookup_size)
 
 def loadlines(path):
@@ -157,19 +156,52 @@ def static_locals():
 
 def member_funcs():
 	names = set(v if v.isupper() else v.title() for v in loadlines('cp2077-dictionary-ndb.txt')) | set('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_@')
-	mfunc_types = {'CAXXZ', 'KAXXZ', 'SAXXZ'} # static void()
+	mfunc_types = set()
 	return_types = [
+		# 'X', # void
+		# 'D', # char
+		# 'E', # unsigned char
+		# 'F', # short
+		# 'G', # unsigned short
+		# '_N', # bool
+		# '_J', # i64
+		# '_K', # u64
+		# 'H', # i32
+		# 'I', # u32
+		# 'M', # float
+		# 'N', # double
+		'PEBD', # const char*
+		'?AVCName@@', # CName
+		'?AVString@red@@', # red::String
+		'?AVStringView@red@@', # red::StringView
+	]
+	for access in 'AIQEMU':
+		for cv in 'AB':
+		# for cv in 'A':
+			for ty in return_types:
+				mfunc_types.add(f'{access}E{cv}A{ty}XZ')
+				# mfunc_types.add(f'{access}E{cv}AX{ty}@Z')
+	collide(segs(SEG_CODE), '?', ['Get'], *rep(names, 2), ['Name', 'Desc', 'Description', 'Id', 'Key', 'Category'], '@', get_class_names(), '@@', mfunc_types)
+
+def constructors():
+	param_types = {
+		'',
 		'X', # void
+		'D', # char
+		'E', # unsigned char
+		'F', # short
+		'G', # unsigned short
 		'_N', # bool
 		'_J', # i64
 		'_K', # u64
 		'H', # i32
 		'I', # u32
-	]
-	for access in 'AIQEMU':
-		for cv in 'AB':
-			for ty in return_types:
-				mfunc_types.add(f'{access}E{cv}A{ty}XZ')
-	collide(segs(SEG_CODE), '?', *rep(names, 2), '@', get_class_names(), '@@', mfunc_types)
+		'M', # float
+		'N', # double
+	}
+	class_names = get_class_names()
+	param_types |= { f'U{v}@@' for v in class_names } | { f'V{v}@@' for v in class_names }
+	param_types |= { f'PEA{v}' for v in param_types } | { f'AEA{v}' for v in param_types } | { f'PEB{v}' for v in param_types } | { f'AEB{v}' for v in param_types }
+	collide(segs(SEG_CODE), '??0', class_names, { f'@@{v}EAA@' for v in 'AIQ' }, *rep(param_types, 2), '@Z')
 
 hasher.save()

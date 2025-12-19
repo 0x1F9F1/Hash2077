@@ -11,18 +11,26 @@ c_collider = POINTER(_Collider)
 
 _script_path = Path(__file__).resolve().parent
 
+_known_path = _script_path / 'data/known.txt'
+_address_path = _script_path / 'cyberpunk2077_addresses.json'
+
 def load_known(path=None):
 	known = {}
-	with open(path or (_script_path / 'data/known.txt'), 'r') as f:
+	with open(path or _known_path, 'r') as f:
 		for line in f.read().splitlines():
 			sha, name = line.split(' ')
 			sha = bytes.fromhex(sha)
 			known[sha] = name
 	return known
 
+def save_known(known, path=None):
+	with open(path or _known_path, 'w') as f:
+		for sha, name in sorted(known.items(), key=lambda x:x[1]):
+			f.write(f'{sha.hex().upper()} {name}\n')
+
 def load_addresses(path=None):
 	addrs = []
-	with open(path or (_script_path / 'cyberpunk2077_addresses.json')) as f:
+	with open(path or _address_path) as f:
 		data = json.load(f)
 		for x in data['Addresses']:
 			seg, off = x['offset'].split(':')
@@ -49,27 +57,28 @@ class Hash2077:
 		self.Collider_AddString = load('Collider_AddString', None, c_collider, c_char_p)
 		self.Collider_Run = load('Collider_Run', c_size_t, c_collider)
 		self.Collider_GetResults = load('Collider_GetResults', None, c_collider, POINTER(c_char_p))
-		self.known = load_known()
+
+		self.known = {}
+		self.load()
+
+	def load(self):
+		self.known |= load_known()
 
 	def save(self):
-		self._save_known(_script_path / 'data/known.txt')
-
-	def _save_known(self, path):
-		with open(path, 'w') as f:
-			for sha, name in sorted(self.known.items(), key=lambda x:x[1]):
-				f.write(f'{sha.hex().upper()} {name}\n')
+		self.load()
+		save_known(self.known)
 
 	def collide(self, hashes, parts, num_threads, batch_size, lookup_size):
 		collider = self.Collider_Create(num_threads, batch_size, lookup_size)
 		results = []
 
-		for adler, sha in hashes:
+		for adler, sha in set(hashes):
 			if sha not in self.known:
 				self.Collider_AddHash(collider, adler, sha)
 
 		for part in parts:
 			self.Collider_NextPart(collider)
-			for value in part:
+			for value in sorted(set(part)):
 				self.Collider_AddString(collider, value.encode('ascii'))
 
 		num_results = self.Collider_Run(collider)
