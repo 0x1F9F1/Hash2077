@@ -10,7 +10,7 @@ ThreadPool::ThreadPool(bool background, size_t num_threads)
     if (num_threads == 0)
         num_threads = std::max<size_t>(4, std::thread::hardware_concurrency());
 
-    printf("Using %zu threads\n", num_threads);
+    // printf("Using %zu threads\n", num_threads);
 
     for (size_t i = 0; i < num_threads; ++i)
     {
@@ -60,6 +60,12 @@ void ThreadPool::run(std::function<void()> func, size_t times)
 
 void ThreadPool::partition(size_t total, size_t partition, std::function<void(size_t, size_t)> func)
 {
+    if (total <= partition)
+    {
+        func(0, total);
+        return;
+    }
+
     std::atomic<std::size_t> current = 0;
 
     const auto worker = [&current, func = std::move(func), total, partition] {

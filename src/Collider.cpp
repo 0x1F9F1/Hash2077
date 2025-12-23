@@ -23,6 +23,58 @@
 
 using Stopwatch = std::chrono::high_resolution_clock;
 
+struct StringView
+{
+    StringView() = default;
+
+    inline StringView(std::string_view str)
+        : length(static_cast<uint16_t>(str.size()))
+    {
+        if (is_small())
+        {
+            std::memcpy(small.data, str.data(), length);
+        }
+        else
+        {
+            large.data = str.data();
+        }
+    }
+
+    bool is_small() const
+    {
+        return length <= sizeof(small.data);
+    }
+
+    const char* data() const
+    {
+        return is_small() ? small.data : large.data;
+    }
+
+    size_t size() const
+    {
+        return length;
+    }
+
+    union
+    {
+        uint16_t length;
+
+        struct
+        {
+            uint16_t length;
+            char data[14];
+        } small;
+
+        struct
+        {
+            uint16_t length;
+            const char* data;
+        } large;
+    };
+};
+
+static_assert(sizeof(StringView) == 16);
+
 struct Collider
 {
 public:
@@ -54,10 +106,10 @@ private:
 
     void ReportProgress();
 
-    void PushPrefix(std::span<const std::string_view> suffixes, std::span<const Adler32::HashPart> adlers);
+    void PushPrefix(std::span<const StringView> suffixes, std::span<const Adler32::HashPart> adlers);
     void PopPrefix();
 
-    void PushSuffix(std::span<const std::string_view> prefixes, std::span<const Adler32::HashPart> adlers);
+    void PushSuffix(std::span<const StringView> prefixes, std::span<const Adler32::HashPart> adlers);
     void PopSuffix();
 
     template <typename Func>
@@ -81,7 +133,7 @@ private:
     size_t LookupSize {};
 
     std::unordered_set<std::string> StringPool {};
-    std::vector<std::vector<std::string_view>> StringParts {};
+    std::vector<std::vector<StringView>> StringParts {};
     std::vector<std::vector<Adler32::HashPart>> AdlerParts {};
 
     std::vector<uint32_t> AdlerHashes {};
@@ -89,12 +141,12 @@ private:
 
     std::vector<std::vector<uint32_t>> Prefixes {};
     std::vector<std::vector<uint32_t>> Suffixes {};
-    std::vector<std::span<const std::string_view>> CurrentParts {};
+    std::vector<std::span<const StringView>> CurrentParts {};
 
     size_t PrefixPos {};
     size_t SuffixPos {};
 
-    using FilterWord = size_t;
+    using FilterWord = uint32_t;
     std::vector<FilterWord> SuffixFilter {};
 
     std::vector<IndexType> SuffixIndices {};
@@ -135,7 +187,7 @@ static inline void bit_set(T* bits, size_t index)
     bits[index / Radix] |= (T(1) << (index % Radix));
 }
 
-void Collider::PushPrefix(std::span<const std::string_view> suffixes, std::span<const Adler32::HashPart> adlers)
+void Collider::PushPrefix(std::span<const StringView> suffixes, std::span<const Adler32::HashPart> adlers)
 {
     size_t suffix_count = suffixes.size();
 
@@ -164,7 +216,7 @@ void Collider::PopSuffix()
     ++SuffixPos;
 }
 
-void Collider::PushSuffix(std::span<const std::string_view> prefixes, std::span<const Adler32::HashPart> adlers)
+void Collider::PushSuffix(std::span<const StringView> prefixes, std::span<const Adler32::HashPart> adlers)
 {
     std::span<const uint32_t> suffixes = Suffixes[SuffixPos];
 
@@ -189,11 +241,9 @@ void Collider::GetPrefix(IndexType index, Func& func) const
     {
         const auto prefixes = CurrentParts[i];
         const auto n = (IndexType) prefixes.size();
-
-        std::string_view prefix = prefixes[index % n];
+        const auto x = index % n;
         index /= n;
-
-        func(prefix);
+        func(prefixes[x]);
     }
 }
 
@@ -207,11 +257,9 @@ size_t Collider::GetSuffix(IndexType index, Func& func) const
         const auto prefixes = CurrentParts[i];
         const auto n = (IndexType) prefixes.size();
         suffix_count /= n;
-
-        std::string_view prefix = prefixes[index / suffix_count];
+        const auto x = index / suffix_count;
         index %= suffix_count;
-
-        func(prefix);
+        func(prefixes[x]);
     }
 
     return index;
@@ -239,7 +287,10 @@ size_t Collider::GetString(size_t prefix, size_t suffix, Func&& func)
 template <typename Index>
 static void SortHashesWithIndices(uint32_t* hashes, Index* indices, size_t count, uint32_t bit = 32)
 {
-    if ((bit == 0) || (count < 16))
+    if (bit == 0)
+        return;
+
+    if (count < 8)
     {
         for (size_t i = 1; i < count; ++i)
         {
@@ -337,14 +388,19 @@ void Collider::AddString(const char* data)
 
 void Collider::Preprocess()
 {
-    auto start = Stopwatch::now();
+    // auto start = Stopwatch::now();
 
     for (const auto& part : StringParts)
     {
-        AdlerParts.emplace_back();
+        auto& output = AdlerParts.emplace_back(part.size());
 
-        for (const auto& str : part)
-            AdlerParts.back().push_back(Adler32::Preprocess((const uint8_t*) str.data(), str.size()));
+        Pool.partition(output.size(), 0x1000, [&](size_t start, size_t count) {
+            for (size_t i = 0; i < count; ++i)
+            {
+                StringView str = part[start + i];
+                output[start + i] = Adler32::Preprocess((const uint8_t*) str.data(), str.size());
+            }
+        });
     }
 
     uint32_t seed = 1;
@@ -361,8 +417,8 @@ void Collider::Preprocess()
 
     while (PrefixPos != SuffixPos)
     {
-        std::span<const std::string_view> next_prefix = StringParts[PrefixPos];
-        std::span<const std::string_view> next_suffix = StringParts[SuffixPos - 1];
+        std::span<const StringView> next_prefix = StringParts[PrefixPos];
+        std::span<const StringView> next_suffix = StringParts[SuffixPos - 1];
 
         size_t next_prefix_size = Prefixes[PrefixPos].size() * next_prefix.size();
         size_t next_suffix_size = Suffixes[SuffixPos].size() * next_suffix.size();
@@ -392,8 +448,8 @@ void Collider::Preprocess()
         }
     }
 
-    printf("Preprocessed: %zu/%zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, StringParts.size(),
-        Prefixes[PrefixPos].size(), Suffixes[SuffixPos].size(), DeltaSeconds(start, Stopwatch::now()));
+    // printf("Preprocessed: %zu/%zu/%zu (%zu/%zu) in %.2f seconds\n", PrefixPos, SuffixPos, StringParts.size(),
+    //     Prefixes[PrefixPos].size(), Suffixes[SuffixPos].size(), DeltaSeconds(start, Stopwatch::now()));
 
     TotalCombinations[0] = AdlerHashes.size();
     TotalCombinations[1] = 0;
@@ -412,7 +468,7 @@ void Collider::CompileSuffixes()
 {
     std::span<const uint32_t> suffixes = Suffixes[SuffixPos];
 
-    constexpr size_t NumBuckets = 0x1000000;
+    constexpr size_t NumBuckets = 0x10000000;
     SuffixBuckets.resize(NumBuckets + 1);
     SuffixBuckets[NumBuckets] = (IndexType) suffixes.size();
     SuffixIndices.resize(suffixes.size());
@@ -466,16 +522,29 @@ void Collider::CompileSuffixes()
         size_t count = end - start;
         std::vector<uint32_t> sub_hashes(count);
 
-        for (size_t i = 0; i < count; ++i)
-            sub_hashes[i] = suffixes[SuffixIndices[start + i]];
+        {
+            size_t i = 0;
+
+#ifdef __AVX2__
+            for (; (count - i) >= 8; i += 8)
+            {
+                __m256i indices = _mm256_loadu_si256((const __m256i*) &SuffixIndices[start + i]);
+                _mm256_storeu_si256(
+                    (__m256i*) &sub_hashes[i], _mm256_i32gather_epi32((const int*) suffixes.data(), indices, 4));
+            }
+#endif
+
+            for (; i < count; ++i)
+                sub_hashes[i] = suffixes[SuffixIndices[start + i]];
+        }
 
         SortHashesWithIndices(sub_hashes.data(), &SuffixIndices[start], sub_hashes.size(), 24);
 
         IndexType here = 0;
 
-        for (size_t i = 0; i < 65536; ++i)
+        for (size_t i = 0; i < 0x100000; ++i)
         {
-            size_t j = (n << 16) | i;
+            size_t j = (n << 20) | i;
             SuffixBuckets[j] = start + here;
 
             for (; here < count; ++here)
@@ -484,7 +553,7 @@ void Collider::CompileSuffixes()
                 bit_set(SuffixFilter.data(), hash);
                 SuffixBucketEntries[start + here] = hash & 0xFF;
 
-                if ((hash >> 8) > j)
+                if ((hash >> 4) > j)
                     break;
             }
         }
@@ -507,60 +576,95 @@ void Collider::Match(size_t start, size_t count)
     if (!g_Running)
         return;
 
-    if (count == 0)
-        return;
-
     const FilterWord* filter = SuffixFilter.data();
     const uint32_t* hashes = Prefixes[PrefixPos].data();
 
     size_t i = start;
-    size_t end = start + count;
 
-    // Prefetch the next hash/filter word to reduce memory latency
-    uint32_t next_hash = hashes[i];
-    FilterWord next_match = bit_test(filter, next_hash);
-
-    while (i != end)
+#ifdef __AVX2__
+    if (size_t end8 = start + (count & ~size_t(7)); i != end8)
     {
-        uint32_t hash = next_hash;
-        FilterWord match = next_match;
-        size_t next = i + 1;
+        __m256i hash = _mm256_loadu_si256((const __m256i*) &hashes[i]);
+        __m256i bits = _mm256_i32gather_epi32((const int*) filter, _mm256_srli_epi32(hash, 5), 4);
 
-        if (next != end) [[likely]]
+        while (i != end8)
         {
-            next_hash = hashes[next];
-            next_match = bit_test(filter, next_hash);
+            i += 8;
+
+            uint32_t mask = _mm256_movemask_ps(
+                _mm256_castsi256_ps(_mm256_sllv_epi32(bits, _mm256_andnot_si256(hash, _mm256_set1_epi32(31)))));
+
+            if (i != end8) [[likely]]
+            {
+                hash = _mm256_loadu_si256((const __m256i*) &hashes[i]);
+                bits = _mm256_i32gather_epi32((const int*) filter, _mm256_srli_epi32(hash, 5), 4);
+            }
+
+            if (mask) [[unlikely]]
+            {
+                while (mask)
+                {
+                    size_t j = i + std::countr_zero(mask) - 8;
+                    AddMatch(j, hashes[j]);
+                    mask &= mask - 1;
+                }
+            }
         }
+    }
+#endif
 
-        if (match) [[unlikely]]
-            AddMatch(i, hash);
+    if (size_t end = start + count; i != end)
+    {
+        // Prefetch the next hash/filter word to reduce memory latency
+        uint32_t next_hash = hashes[i];
+        FilterWord next_match = bit_test(filter, next_hash);
 
-        i = next;
+        while (i != end)
+        {
+            uint32_t hash = next_hash;
+            FilterWord match = next_match;
+            size_t next = i + 1;
+
+            if (next != end) [[likely]]
+            {
+                next_hash = hashes[next];
+                next_match = bit_test(filter, next_hash);
+            }
+
+            if (match) [[unlikely]]
+                AddMatch(i, hash);
+
+            i = next;
+        }
     }
 }
 
 void Collider::AddMatch(size_t index, uint32_t hash)
 {
-    size_t hash_bucket = hash >> 8;
+    size_t hash_bucket = hash >> 4;
     uint8_t sub_hash = hash & 0xFF;
 
     const uint8_t* subs = SuffixBucketEntries.data();
     const uint8_t* start = &subs[SuffixBuckets[hash_bucket]];
     const uint8_t* end = &subs[SuffixBuckets[hash_bucket + 1]];
-    const uint8_t* find = std::find(start, end, sub_hash);
+    const uint8_t* find = static_cast<const uint8_t*>(std::memchr(start, sub_hash, end - start));
+
+    static constexpr size_t MaxMatchLength = 2048;
+    char buffer[MaxMatchLength];
 
     for (; (find != end) && (*find == sub_hash); ++find)
     {
-        SHA256_CTX hasher;
-        IndexType suffix = SuffixIndices[find - subs];
+        size_t length = 0;
 
-        size_t target = GetString(
-            index, suffix, [&hasher](std::string_view str) { hasher.Update((const uint8_t*) str.data(), str.size()); });
+        size_t target = GetString(index, SuffixIndices[find - subs], [&](StringView str) {
+            size_t end = std::min<size_t>(length + str.size(), std::size(buffer));
+            std::memcpy(&buffer[length], str.data(), end - length);
+            length = end;
+        });
 
-        if (hasher.Digest() == ShaHashes[target])
+        if (Sha256(buffer, length) == ShaHashes[target]) [[unlikely]]
         {
-            std::string value;
-            GetString(index, suffix, [&value](std::string_view str) { value += str; });
+            std::string_view value = {buffer, length};
 
             std::lock_guard guard(MatchLock);
 
@@ -585,7 +689,7 @@ void Collider::Run()
     if ((SuffixPos - PrefixPos) >= 2)
     {
         size_t step = LookupSize / Suffixes[SuffixPos].size();
-        std::span<const std::string_view> parts = StringParts[SuffixPos - 1];
+        std::span<const StringView> parts = StringParts[SuffixPos - 1];
         std::span<const Adler32::HashPart> adler_parts = AdlerParts[SuffixPos - 1];
 
         if (step > 128)
@@ -633,7 +737,7 @@ void Collider::CollideForwards()
     }
     else
     {
-        std::span<const std::string_view> parts = StringParts[PrefixPos];
+        std::span<const StringView> parts = StringParts[PrefixPos];
         std::span<const Adler32::HashPart> adler_parts = AdlerParts[PrefixPos];
 
         size_t step = BatchSize / Prefixes[PrefixPos].size();
@@ -698,34 +802,34 @@ static BOOL WINAPI CtrlHandler(DWORD fdwCtrlType)
 }
 #endif
 
-Collider* Collider_Create(size_t num_threads, size_t batch_size, size_t lookup_size)
+Collider* COLLIDERCC Collider_Create(size_t num_threads, size_t batch_size, size_t lookup_size)
 {
     return new Collider(num_threads, batch_size, lookup_size);
 }
 
-void Collider_Destroy(Collider* collider)
+void COLLIDERCC Collider_Destroy(Collider* collider)
 {
     delete collider;
 }
 
-void Collider_AddHash(Collider* collider, uint32_t adler, const void* sha)
+void COLLIDERCC Collider_AddHash(Collider* collider, uint32_t adler, const void* sha)
 {
     SHA256_Hash sha256;
     memcpy(&sha256, sha, sizeof(sha256));
     collider->AddHash(adler, sha256);
 }
 
-void Collider_NextPart(Collider* collider)
+void COLLIDERCC Collider_NextPart(Collider* collider)
 {
     collider->NextPart();
 }
 
-void Collider_AddString(Collider* collider, const char* string)
+void COLLIDERCC Collider_AddString(Collider* collider, const char* string)
 {
     collider->AddString(string);
 }
 
-size_t Collider_Run(Collider* collider)
+size_t COLLIDERCC Collider_Run(Collider* collider)
 {
     g_Running = true;
 
@@ -755,7 +859,7 @@ size_t Collider_Run(Collider* collider)
     return total;
 }
 
-void Collider_GetResults(Collider* collider, const char** results)
+void COLLIDERCC Collider_GetResults(Collider* collider, const char** results)
 {
     for (const auto& value : collider->FoundStrings)
         *results++ = value.c_str();

@@ -19,15 +19,20 @@ if (MSVC)
         /Oi
         /arch:AVX2
         $<$<CONFIG:Debug>:/Ob1>
-        $<$<CONFIG:MinSizeRel,Release>:/Ob2>
-        $<$<CONFIG:MinSizeRel,Release>:/Ot>
+        $<$<NOT:$<CONFIG:Debug>>:/Ob2>
+        $<$<NOT:$<CONFIG:Debug>>:/Ot>
+        $<$<NOT:$<CONFIG:Debug>>:/Oy>
         $<$<NOT:$<CONFIG:Debug>>:/Zi>
+        $<$<NOT:$<CONFIG:Debug>>:/GS->
+        $<$<NOT:$<CONFIG:Debug>>:/Gy>
+        $<$<NOT:$<CONFIG:Debug>>:/GL>
     )
 
     add_link_options(
-        $<$<NOT:$<CONFIG:Debug>>:/DEBUG>
+        /DEBUG
         $<$<NOT:$<CONFIG:Debug>>:/OPT:REF>
         $<$<NOT:$<CONFIG:Debug>>:/OPT:ICF>
+        $<$<NOT:$<CONFIG:Debug>>:/LTCG>
     )
 endif()
 

@@ -37,6 +37,18 @@ def load_addresses(path=None):
 			addrs.append((seg, int(off, 16), int(x['hash']), bytes.fromhex(x['secondary hash'])))
 	return addrs
 
+def process_parts(parts):
+	results = []
+	for i, part in enumerate(parts):
+		part = set(part)
+		if i:
+			prev = results[-1]
+			if len(prev) == 1 or len(part) == 1:
+				results[-1] = set(x + y for x in prev for y in part)
+				continue
+		results.append(part)
+	return results
+
 class Hash2077:
 	def __init__(self, dll_path=None):
 		if dll_path is None:
@@ -76,9 +88,9 @@ class Hash2077:
 			if sha not in self.known:
 				self.Collider_AddHash(collider, adler, sha)
 
-		for part in parts:
+		for part in process_parts(parts):
 			self.Collider_NextPart(collider)
-			for value in sorted(set(part)):
+			for value in sorted(part):
 				self.Collider_AddString(collider, value.encode('ascii'))
 
 		num_results = self.Collider_Run(collider)

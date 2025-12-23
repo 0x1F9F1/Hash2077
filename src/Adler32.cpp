@@ -1,6 +1,8 @@
 #include "Adler32.h"
 
-#include <immintrin.h>
+#ifdef __AVX2__
+#    include <immintrin.h>
+#endif
 
 Adler32::HashPart Adler32::Preprocess(const uint8_t* data, size_t length)
 {
@@ -21,6 +23,7 @@ void Adler32::HashForward(const uint32_t* input, uint32_t* output, size_t count,
 {
     size_t here = 0;
 
+#ifdef __AVX2__
     const __m256i mask = _mm256_set1_epi32(0xFFFF);
     const __m256i modulo = _mm256_set1_epi32(65521);
     const __m256i maxval = _mm256_set1_epi32(65521 - 1);
@@ -52,6 +55,7 @@ void Adler32::HashForward(const uint32_t* input, uint32_t* output, size_t count,
         hashes = _mm256_or_si256(a, _mm256_slli_epi32(b, 16));
         _mm256_storeu_si256((__m256i*) &output[here], hashes);
     }
+#endif
 
     for (; here != count; ++here)
     {
@@ -75,6 +79,7 @@ void Adler32::HashReverse(const uint32_t* input, uint32_t* output, size_t count,
 {
     size_t here = 0;
 
+#ifdef __AVX2__
     const __m256i mask = _mm256_set1_epi32(0xFFFF);
     const __m256i modulo = _mm256_set1_epi32(65521);
     const __m256i maxval = _mm256_set1_epi32(65521 - 1);
@@ -106,6 +111,7 @@ void Adler32::HashReverse(const uint32_t* input, uint32_t* output, size_t count,
         hashes = _mm256_or_si256(a, _mm256_slli_epi32(b, 16));
         _mm256_storeu_si256((__m256i*) &output[here], hashes);
     }
+#endif
 
     for (; here != count; ++here)
     {

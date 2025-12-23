@@ -16,6 +16,9 @@ def segs(*seg_ids):
 def adlers(*adler_ids):
 	return [ (adler, sha) for seg, off, adler, sha in addrs if adler in adler_ids ]
 
+def shas(*sha_ids):
+	return [ (adler, sha) for seg, off, adler, sha in addrs if sha in sha_ids ]
+
 def collide(hashes, *parts, num_threads=0, batch_size=2**26, lookup_size=2**30):
 	part_lists = []
 	for part in parts:

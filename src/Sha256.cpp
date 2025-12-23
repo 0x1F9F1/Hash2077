@@ -1,17 +1,27 @@
 #include "Sha256.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
-#include <immintrin.h>
-
-#define ENABLE_SHA_ISA 1
 
 #ifdef _MSC_VER
 #    include <stdlib.h>
-#    pragma intrinsic(_byteswap_uint64)
+#    define NOINLINE __declspec(noinline)
+#else
+#    define NOINLINE __attribute__((__noinline__))
 #endif
 
-#if ENABLE_SHA_ISA
-static void SHA256Transform(uint32_t* state, const uint8_t* data)
+#ifdef __AVX2__
+#    include <immintrin.h>
+#endif
+
+#ifdef __AVX2__
+#    define ENABLE_SHA_ISA
+#endif
+
+#ifdef ENABLE_SHA_ISA
+NOINLINE void SHA256Transform(uint32_t* state, const uint8_t* data)
 {
     __m128i STATE0, STATE1;
     __m128i MSG, TMP, MASK;
@@ -216,7 +226,7 @@ static const uint32_t k[64] = {0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0
     0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa,
     0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
-static void SHA256Transform(uint32_t* state, const uint8_t* data)
+NOINLINE void SHA256Transform(uint32_t* state, const uint8_t* data)
 {
     uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
 
@@ -259,47 +269,93 @@ static void SHA256Transform(uint32_t* state, const uint8_t* data)
 }
 #endif
 
-void SHA256_CTX::Transform()
+struct SHA256_CTX
 {
-    SHA256Transform(state, data);
-}
+    uint8_t data[64];
+    size_t datalen = 0;
+    uint64_t bitlen = 0;
+    uint32_t state[8] {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 
-SHA256_Hash SHA256_CTX::Digest()
-{
-    size_t i = datalen;
-
-    if (datalen < 56)
+    void Update(const uint8_t* input, size_t len)
     {
-        data[i++] = 0x80;
-        while (i < 56)
-            data[i++] = 0x00;
-    }
-    else
-    {
-        data[i++] = 0x80;
-        while (i < 64)
-            data[i++] = 0x00;
-        Transform();
-        memset(data, 0, 56);
+        while (len) [[likely]]
+        {
+            size_t n = std::min<size_t>(64 - datalen, len);
+            std::memcpy(&data[datalen], input, n);
+            datalen += n;
+
+            if (datalen != 64) [[likely]]
+                break;
+
+            input += n;
+            len -= n;
+
+            Transform();
+            bitlen += 512;
+            datalen = 0;
+        }
     }
 
-    bitlen += datalen * 8;
+    void Transform()
+    {
+        SHA256Transform(state, data);
+    }
+
+    SHA256_Hash Digest()
+    {
+        size_t i = datalen;
+
+        if (datalen < 56)
+        {
+            data[i++] = 0x80;
+            while (i < 56)
+                data[i++] = 0x00;
+        }
+        else
+        {
+            data[i++] = 0x80;
+            while (i < 64)
+                data[i++] = 0x00;
+            Transform();
+            memset(data, 0, 56);
+        }
+
+        bitlen += datalen * 8;
 
 #ifdef _MSC_VER
-    uint64_t bitlen_be = _byteswap_uint64(bitlen);
+        uint64_t bitlen_be = _byteswap_uint64(bitlen);
 #else
-    uint64_t bitlen_be = __builtin_bswap64(bitlen);
+        uint64_t bitlen_be = __builtin_bswap64(bitlen);
 #endif
-    std::memcpy(&data[56], &bitlen_be, sizeof(bitlen_be));
+        std::memcpy(&data[56], &bitlen_be, sizeof(bitlen_be));
 
-    Transform();
+        Transform();
 
-    SHA256_Hash hash;
+        SHA256_Hash hash;
 
-    const __m256i bswap32_shuffle = _mm256_setr_epi8(
-        3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
-    _mm256_storeu_si256(
-        (__m256i*) hash.data, _mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i*) state), bswap32_shuffle));
+#ifdef __AVX2__
+        const __m256i bswap32_shuffle = _mm256_setr_epi8(
+            3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+        _mm256_storeu_si256(
+            (__m256i*) hash.data, _mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i*) state), bswap32_shuffle));
+#else
+        for (size_t j = 0; j < 8; ++j)
+        {
+#    ifdef _MSC_VER
+            hash.data32[j] = _byteswap_ulong(state[j]);
+#    else
+            hash.data32[j] = __builtin_bswap32(state[j]);
+#    endif
+        }
+#endif
 
-    return hash;
+        return hash;
+    }
+};
+
+SHA256_Hash Sha256(const void* data, size_t length)
+{
+    SHA256_CTX hasher;
+    hasher.Update((const uint8_t*) data, length);
+    return hasher.Digest();
 }
